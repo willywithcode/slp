@@ -20,9 +20,9 @@ jobs:
         node: ["22", "24"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -32,5 +32,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # dist/ is committed so `npm install -g github:willywithcode/spl` needs
+      # no build step (npm cannot build git dependencies installed globally).
+      - name: Committed dist/ matches the sources
+        if: runner.os == 'Linux'
+        run: git diff --exit-code -- dist
       - name: Smoke-test the built CLI
         run: node dist/bin.js help
