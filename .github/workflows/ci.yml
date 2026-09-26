@@ -1,0 +1,36 @@
+name: CI
+
+# Proves the package on every supported platform (ADR 0001): Windows, macOS
+# and Ubuntu, on the oldest and newest supported Node majors. Tests use a fake
+# herdr, so no Herdr install or agent is needed here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # --ignore-scripts skips `prepare`; build explicitly below.
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Smoke-test the built CLI
+        run: node dist/bin.js help

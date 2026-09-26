@@ -1,0 +1,22 @@
+# Decisions
+
+Decision records preserve lasting product, architecture, compatibility,
+security, data-ownership, and validation choices.
+
+Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
+
+## Current Decisions
+
+- [0001](0001-standalone-typescript-tool.md) spl is a standalone TypeScript tool, separate from mustang
+- [0002](0002-room-data-outside-repository.md) Room data lives outside the repository
+- [0003](0003-record-before-deliver.md) Record before delivery; identity from the Herdr pane
+- [0004](0004-agent-launch-permissions.md) Agents get permission for `spl` only
+- [0005](0005-watch-alert-policy.md) Watch alert policy
+
+## Add A Decision When
+
+- a lasting product or architecture choice changes;
+- public compatibility or data ownership changes;
+- security or recovery policy changes;
+- validation is materially added, removed, or weakened; or
+- the source-of-truth hierarchy changes.
