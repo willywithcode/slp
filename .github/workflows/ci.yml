@@ -32,8 +32,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # dist/ is committed so `npm install -g github:willywithcode/spl` needs
-      # no build step (npm cannot build git dependencies installed globally).
+      # dist/ is committed so installing the GitHub tarball globally needs no
+      # build step (npm cannot build git dependencies installed globally).
       - name: Committed dist/ matches the sources
         if: runner.os == 'Linux'
         run: git diff --exit-code -- dist

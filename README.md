@@ -23,11 +23,14 @@ and live Herdr runs on Windows; macOS/Ubuntu are covered by CI once it runs.
 No clone needed; the built CLI is committed in `dist/`:
 
 ```sh
-npm install -g github:willywithcode/spl   # puts `spl` on PATH (spl.cmd on Windows)
+npm install -g https://github.com/willywithcode/spl/archive/refs/heads/main.tar.gz
 spl help
 ```
 
-Update with the same command; remove with `npm uninstall -g spl`. `spl` must be
+This puts `spl` on `PATH` (`spl.cmd` on Windows). Use the tarball URL, not
+`github:willywithcode/spl`: npm's global install from git links to a temporary
+clone that is deleted afterwards. Update with the same command; remove with
+`npm uninstall -g spl`. `spl` must be
 on `PATH` inside Herdr panes, because the agents run it.
 
 To work on spl itself: clone, `npm install`, `npm test`, `npm run build`
