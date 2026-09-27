@@ -11,11 +11,11 @@ export interface RoleSpec {
   watched: boolean;
   /** May not change files. */
   readOnly: boolean;
-  /** May edit the project's CONTEXT.md (outside the repository). */
+  /** May write the project's CONTEXT.md (`slp context -`). */
   editsContext: boolean;
 }
 
-const COMMON = ["guide", "whoami", "status"] as const;
+const COMMON = ["guide", "whoami", "status", "context"] as const;
 
 export const ROLE_SPECS: Record<Role, RoleSpec> = {
   supervisor: {
@@ -23,11 +23,11 @@ export const ROLE_SPECS: Record<Role, RoleSpec> = {
     watched: false, readOnly: true, editsContext: true,
   },
   lead: {
-    verbs: [...COMMON, "message", "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "answer", "incidents", "ack"],
+    verbs: [...COMMON, "message", "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "answer", "incidents", "ack", "diff"],
     watched: true, readOnly: true, editsContext: false,
   },
   peer: { verbs: [...COMMON, "done", "ask"], watched: true, readOnly: false, editsContext: false },
-  reviewer: { verbs: [...COMMON, "done", "ask"], watched: false, readOnly: true, editsContext: false },
+  reviewer: { verbs: [...COMMON, "done", "ask", "diff"], watched: false, readOnly: true, editsContext: false },
   critic: { verbs: [...COMMON, "findings"], watched: false, readOnly: true, editsContext: false },
 };
 
@@ -60,7 +60,6 @@ export function agentArgs(agent: Agent, c: LaunchContext): string[] {
       // ADR 0004: only slp runs without a prompt; everything else still asks.
       "--allowedTools", "Bash(slp *)", "Bash(slp.cmd *)",
     ];
-    if (spec.editsContext) args.push("--add-dir", c.projectDir);
     if (spec.readOnly && c.role !== "supervisor" && c.role !== "lead") {
       args.push("--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit");
     }

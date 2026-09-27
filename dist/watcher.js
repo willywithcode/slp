@@ -24,6 +24,8 @@ export class Watcher {
     blockedSince = new Map();
     blockedTold = new Set();
     missing = new Map();
+    /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
+    dialogTold = new Set();
     constructor(deps, projectId) {
         this.deps = deps;
         this.projectId = projectId;
@@ -34,7 +36,16 @@ export class Watcher {
         const project = await loadProject(this.deps.env, this.projectId);
         if (!project)
             throw new GoneError(`Project ${this.projectId} does not exist`);
-        await pump(this.deps, project.id);
+        const pumped = await pump(this.deps, project.id);
+        for (const seat of pumped.atDialog) {
+            if (this.dialogTold.has(seat))
+                continue;
+            this.dialogTold.add(seat);
+            await this.deps.herdr.notify(`slp: ${seat} waits on you`, "A startup dialog (folder trust) in its pane needs the Human; its letters wait.").catch(() => undefined);
+        }
+        for (const seat of [...this.dialogTold])
+            if (!pumped.atDialog.includes(seat))
+                this.dialogTold.delete(seat);
         this.startRequest(project, await readLedger(this.deps.env, project.id));
         const state = fold(await readLedger(this.deps.env, project.id));
         const agents = await this.deps.herdr.agentList().catch(() => null);

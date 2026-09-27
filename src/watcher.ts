@@ -26,6 +26,8 @@ export class Watcher {
   private readonly blockedSince = new Map<string, number>();
   private readonly blockedTold = new Set<string>();
   private readonly missing = new Map<string, number>();
+  /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
+  private readonly dialogTold = new Set<string>();
 
   constructor(private readonly deps: Deps, private readonly projectId: string) {}
 
@@ -35,7 +37,13 @@ export class Watcher {
   async tick(): Promise<void> {
     const project = await loadProject(this.deps.env, this.projectId);
     if (!project) throw new GoneError(`Project ${this.projectId} does not exist`);
-    await pump(this.deps, project.id);
+    const pumped = await pump(this.deps, project.id);
+    for (const seat of pumped.atDialog) {
+      if (this.dialogTold.has(seat)) continue;
+      this.dialogTold.add(seat);
+      await this.deps.herdr.notify(`slp: ${seat} waits on you`, "A startup dialog (folder trust) in its pane needs the Human; its letters wait.").catch(() => undefined);
+    }
+    for (const seat of [...this.dialogTold]) if (!pumped.atDialog.includes(seat)) this.dialogTold.delete(seat);
     this.startRequest(project, await readLedger(this.deps.env, project.id));
     const state = fold(await readLedger(this.deps.env, project.id));
     const agents = await this.deps.herdr.agentList().catch(() => null);

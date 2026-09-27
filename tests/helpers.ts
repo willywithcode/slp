@@ -12,12 +12,14 @@ import { projectIdFor } from "../src/core/project.js";
 import { Herdr, type ExecResult } from "../src/herdr.js";
 import { submitCheck } from "../src/letters.js";
 import { startRetry } from "../src/seats.js";
+import { watchStartMs } from "../src/team.js";
 import { fold, type State } from "../src/state.js";
 
 // Retries and submission checks must not slow the suite down.
 startRetry.delayMs = 1;
 submitCheck.waitMs = 30;
 submitCheck.pollMs = 5;
+watchStartMs.value = 0;
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -72,6 +74,8 @@ export class FakeHerdrCli {
   keys: { target: string; keys: string[] }[] = [];
   /** The process in each pane's foreground; default a POSIX shell. */
   shell = "bash";
+  /** A process other than the shell that Herdr reports in the foreground. */
+  stray: string | null = null;
   unreachable = false;
   /** Status a prompted agent moves to. */
   promptedStatus = "working";
@@ -101,7 +105,11 @@ export class FakeHerdrCli {
       this.agents.delete(args[2]!);
       return ok({});
     }
-    if (group === "pane" && action === "process-info") return ok({ process_info: { foreground_processes: [{ name: this.shell }] } });
+    if (group === "pane" && action === "process-info") {
+      // A stray process may show in the foreground instead of the shell (Windows).
+      const foreground = this.stray ? [{ name: this.stray, pid: 999 }] : [{ name: this.shell, pid: 1 }];
+      return ok({ process_info: { foreground_processes: foreground, shell_pid: 1 } });
+    }
     if (group === "pane" && action === "wait-output") return ok({});
     if (group === "pane" && action === "run") { this.ran.push({ pane: args[2]!, command: args[3]! }); return ok({}); }
     if (group === "agent" && action === "start") {

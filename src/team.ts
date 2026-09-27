@@ -32,6 +32,9 @@ The Supervisor keeps it short and current; nobody else edits it.
 ## What it does not do
 `;
 
+/** How long `slp start` waits for its watcher to take the watch lock; mutable for tests. */
+export const watchStartMs = { value: 15_000 };
+
 /** Start the team in the Human's own Herdr pane (ADR 0012): Supervisor to the right, watcher below. */
 export async function start(deps: Deps, cwd: string, config: Config): Promise<Project> {
   const pane = deps.env.HERDR_PANE_ID;
@@ -68,6 +71,11 @@ export async function start(deps: Deps, cwd: string, config: Config): Promise<Pr
     await deps.herdr.paneRun(watchPane, `${bin} watch --project ${project.id}`);
     project = { ...project, watchPane };
     await saveProject(deps.env, project);
+    // Seats opened next rely on it (queued letters), so wait until it runs.
+    const deadline = Date.now() + watchStartMs.value;
+    while (!(await lockHeldByLiveProcess(watchLockPath(deps.env, project.id))) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
     deps.out(`watcher: pane ${watchPane}`);
   }
   const opened = await openSeat(deps, project, config, {

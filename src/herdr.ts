@@ -56,11 +56,20 @@ export class Herdr {
     await this.call(["tab", "close", tabId]);
   }
 
-  /** Names of the processes in the foreground of a pane (its shell, or what runs in it). */
-  async paneForeground(paneId: string): Promise<string[]> {
+  /**
+   * The pane's shell process id and the processes Herdr sees in its
+   * foreground. On Windows the foreground list can name a stray process that
+   * is not the pane's shell (seen live: a Codex app-server), so callers
+   * prefer `shellPid`.
+   */
+  async paneProcesses(paneId: string): Promise<{ shellPid: number | null; foreground: { name: string; pid: number | null }[] }> {
     const r = await this.call(["pane", "process-info", "--pane", paneId]);
-    const procs: unknown = r.process_info?.foreground_processes;
-    return Array.isArray(procs) ? procs.flatMap((p: Record<string, unknown>) => (typeof p?.name === "string" ? [p.name] : [])) : [];
+    const info = r.process_info ?? {};
+    const procs: unknown = info.foreground_processes;
+    const foreground = Array.isArray(procs)
+      ? procs.flatMap((p: Record<string, unknown>) => (typeof p?.name === "string" ? [{ name: p.name, pid: typeof p.pid === "number" ? p.pid : null }] : []))
+      : [];
+    return { shellPid: typeof info.shell_pid === "number" ? info.shell_pid : null, foreground };
   }
 
   /** Wait until `match` appears in the pane's output. */

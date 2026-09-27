@@ -103,7 +103,8 @@ describe("agent arguments", () => {
 
   it("pre-approves only slp for Claude, and keeps Reviewers read-only", () => {
     const sup = agentArgs("claude", { ...base, role: "supervisor", sessionId: "u" });
-    expect(sup).toEqual(expect.arrayContaining(["--session-id", "u", "--add-dir", "/h/p", "Bash(slp *)"]));
+    expect(sup).toEqual(expect.arrayContaining(["--session-id", "u", "Bash(slp *)"]));
+    expect(sup).not.toContain("--add-dir");
     expect(sup).not.toContain("--disallowedTools");
     expect(agentArgs("claude", { ...base, role: "reviewer" })).toEqual(expect.arrayContaining(["--disallowedTools", "Edit", "Write"]));
     expect(agentArgs("claude", { ...base, role: "lead" })).not.toContain("--add-dir");

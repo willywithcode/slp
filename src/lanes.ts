@@ -4,11 +4,11 @@ import type { Deps } from "./core/deps.js";
 import { SlpError } from "./core/errors.js";
 import { append, nextId, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
-import { contextPath, type Project } from "./core/project.js";
+import type { Project } from "./core/project.js";
 import { addWorktree, currentBranch, dirtyPaths, git, gitOk, head, removeWorktree } from "./git.js";
 import { isCatchAll, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
-import { sendLetter } from "./letters.js";
+import { describe, sendLetter } from "./letters.js";
 import { closeSeat, openSeat } from "./seats.js";
 import { fold, liveSeats, type Lane, type State } from "./state.js";
 
@@ -23,7 +23,7 @@ export interface LaneInput {
 }
 
 function slug(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "lane";
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32).replace(/^-+|-+$/g, "") || "lane";
 }
 
 export function checkWriteSet(state: State, writeSet: readonly string[], except?: string): void {
@@ -39,7 +39,7 @@ export function checkWriteSet(state: State, writeSet: readonly string[], except?
   }
 }
 
-function directive(project: Project, deps: Deps, lane: Lane): string {
+function directive(lane: Lane): string {
   return [
     `Lane ${lane.id}: ${lane.title}`,
     "",
@@ -51,7 +51,7 @@ function directive(project: Project, deps: Deps, lane: Lane): string {
     "",
     `Write set: ${lane.writeSet.join(", ")}`,
     `Branch: ${lane.branch}   Working copy: ${lane.workdir}   Base: ${lane.base} @ ${lane.baseCommit.slice(0, 10)}`,
-    `Concept (the Human's word, read-only for you): ${contextPath(deps.env, project.id)}`,
+    "The Human's concept (read-only for you): `slp context`",
     ...(lane.humanWords ? ["", "The Human asked:", lane.humanWords] : []),
   ].join("\n");
 }
@@ -93,26 +93,32 @@ export async function openLane(deps: Deps, project: Project, config: Config, inp
     intro: intro(id, "lead", ` (lane ${id}: ${input.title})`, config.launchers[config.roles.lead.use[0]!]?.agent ?? "claude"),
   });
   if (lead.attention) deps.out(`NEEDS ATTENTION: ${lead.attention}`);
-  await sendLetter(deps, project.id, { letter: "DIRECTIVE", from: "sup", to: id, text: directive(project, deps, lane), lane: id });
+  await sendLetter(deps, project.id, { letter: "DIRECTIVE", from: "sup", to: id, text: directive(lane), lane: id });
 
-  if (input.humanWords.trim()) {
+  if (input.humanWords.trim()) await openCritic(deps, project, config, lane, lead.seat.paneId);
+  return lane;
+}
+
+/** A Critic reads the lane against the Human's words once (ADR 0007); the lane runs without one if it cannot open. */
+async function openCritic(deps: Deps, project: Project, config: Config, lane: Lane, beside: string): Promise<void> {
+  const name = `${lane.id}-critic`;
+  try {
     const critic = await openSeat(deps, project, config, {
-      name: `${id}-critic`, role: "critic", lane: id, task: null, cwd: project.root,
-      place: { kind: "split", from: lead.seat.paneId, direction: "down" },
-      intro: intro(`${id}-critic`, "critic", ` (lane ${id})`, config.launchers[config.roles.critic.use[0]!]?.agent ?? "claude"),
+      name, role: "critic", lane: lane.id, task: null, cwd: lane.workdir,
+      place: { kind: "split", from: beside, direction: "down" },
+      intro: intro(name, "critic", ` (lane ${lane.id})`, config.launchers[config.roles.critic.use[0]!]?.agent ?? "claude"),
     });
     if (critic.attention) deps.out(`NEEDS ATTENTION: ${critic.attention}`);
     await sendLetter(deps, project.id, {
-      letter: "MESSAGE", from: "slp", to: `${id}-critic`, lane: id,
+      letter: "MESSAGE", from: "slp", to: name, lane: lane.id,
       text: [
-        "Read this lane against the Human's own words and CONTEXT.md, then report with `slp findings`.",
-        "", "The Human's words:", input.humanWords, "",
-        `CONTEXT.md: ${contextPath(deps.env, project.id)}`, "",
-        "The lane:", directive(project, deps, lane),
+        "Read this lane against the Human's own words and the concept (`slp context`), then report with `slp findings`.",
+        "", "The Human's words:", lane.humanWords, "", "The lane:", directive(lane),
       ].join("\n"),
     });
+  } catch (error) {
+    deps.out(`The Critic for ${lane.id} could not open (${describe(error)}); the lane runs without it.`);
   }
-  return lane;
 }
 
 export interface Amendment { why: string; outcome?: string; acceptance?: string[]; outOfScope?: string[]; writeSet?: string[] }

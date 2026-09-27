@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,12 +7,11 @@ import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir, slpHome } from "./core/paths.js";
 import { HerdrError } from "./herdr.js";
-import { describe, sendLetter } from "./letters.js";
+import { atStartupDialog, describe, queueLetter, sendLetter, watchLockPath } from "./letters.js";
+import { lockHeldByLiveProcess } from "./core/lock.js";
 import { agentArgs } from "./roles.js";
 import { envCommands, joinCommands, readyProbe, shellFamily } from "./shells.js";
 import { fold } from "./state.js";
-/** Startup screens only the Human may answer (Claude Code, Codex). */
-const STARTUP_DIALOG = /trust this folder|do you trust|one you trust|trust the files|trust and continue/i;
 /** Retries while a fresh pane's shell is not ready; mutable only for tests. */
 export const startRetry = { attempts: 6, delayMs: 1_000 };
 export function herdrName(project, seat) {
@@ -54,7 +54,8 @@ export async function openSeat(deps, project, config, spec) {
         slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: spec.writableDirs ?? [],
     });
     const name = herdrName(project.id, spec.name);
-    paneId = await startAgent(deps, name, choice.launcher.agent, paneId, args, { cwd: spec.cwd, env: paneEnv, ready });
+    const started = await startAgent(deps, name, choice.launcher.agent, paneId, args, { cwd: spec.cwd, env: paneEnv, ready });
+    paneId = started.paneId;
     const event = await append(deps.env, project.id, () => ({
         kind: "seat", name: spec.name, role: spec.role, lane: spec.lane, task: spec.task,
         launcher: choice.launcherName, agent: choice.launcher.agent, model: choice.model, effort: choice.effort,
@@ -63,9 +64,15 @@ export async function openSeat(deps, project, config, spec) {
     const seat = fold(await readLedger(deps.env, project.id)).seats.get(event.name);
     // Herdr may report an agent ready while a folder-trust dialog is shown; the
     // letter's Enter would then accept it on the Human's behalf. Never.
-    const screen = await deps.herdr.agentRead(paneId).catch(() => "");
-    if (STARTUP_DIALOG.test(screen)) {
-        return { seat, attention: `${spec.name} waits on a folder-trust dialog in pane ${paneId}; answer it, then run \`slp intro ${spec.name}\`.` };
+    if (started.blocked || await atStartupDialog(deps, paneId)) {
+        // With a watcher, the introduction (and anything sent after it) waits
+        // until the agent is ready; without one the Human resends it.
+        const watched = await lockHeldByLiveProcess(watchLockPath(deps.env, project.id));
+        if (watched)
+            await queueLetter(deps, project.id, { letter: "INTRO", from: "slp", to: spec.name, text: spec.intro, lane: spec.lane, task: spec.task });
+        const then = watched ? "slp introduces it once it is ready" : `then run \`slp intro ${spec.name}\``;
+        await deps.herdr.notify(`slp: ${spec.name} needs you`, `Answer the startup dialog in pane ${paneId}; ${then}.`).catch(() => undefined);
+        return { seat, attention: `${spec.name} waits on a startup dialog (folder trust) in pane ${paneId}; answer it yourself; ${then}.` };
     }
     try {
         await sendLetter(deps, project.id, { letter: "INTRO", from: "slp", to: spec.name, text: spec.intro, lane: spec.lane, task: spec.task });
@@ -90,30 +97,68 @@ async function prepare(deps, paneId, env, prep) {
     await deps.herdr.paneRun(paneId, joinCommands(family, [...envCommands(family, expanded), ...(extra ? [extra] : []), probe.command]));
     await deps.herdr.paneWaitOutput(paneId, probe.match, 30_000);
 }
+export const processName = (pid) => new Promise((resolve) => {
+    const [file, args] = process.platform === "win32"
+        ? ["tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]]
+        : ["ps", ["-p", String(pid), "-o", "comm="]];
+    execFile(file, args, { windowsHide: true }, (error, stdout) => {
+        if (error)
+            return resolve(null);
+        const out = String(stdout).trim();
+        const name = process.platform === "win32" ? /^"([^"]+)"/.exec(out)?.[1] : out.split("/").pop();
+        resolve(name || null);
+    });
+});
+/** Replaceable in tests. */
+export const shellLookup = { processName };
+/**
+ * Which shell runs in a pane: the pane's own shell process when Herdr names
+ * it, else what Herdr sees in the foreground (a fresh pane shows its shell).
+ */
 export async function detectShell(deps, paneId) {
     for (let attempt = 1; attempt <= 20; attempt++) {
-        const family = shellFamily(await deps.herdr.paneForeground(paneId).catch(() => []));
-        if (family)
-            return family;
+        const info = await deps.herdr.paneProcesses(paneId).catch(() => null);
+        if (info) {
+            const own = info.foreground.find((p) => p.pid !== null && p.pid === info.shellPid)?.name
+                ?? (info.shellPid !== null ? await shellLookup.processName(info.shellPid) : null);
+            const family = shellFamily(own ? [own] : info.foreground.map((p) => p.name));
+            if (family)
+                return family;
+        }
         await new Promise((resolve) => setTimeout(resolve, 250));
     }
     throw new SlpError(`Could not tell which shell runs in pane ${paneId}.`);
 }
+/** Herdr's refusal when the agent shows a dialog (folder trust) before it is ready. */
+function blockedAtStartup(error) {
+    return error instanceof HerdrError && /blocked during startup/i.test(error.message);
+}
 /**
  * `herdr agent start`, retrying a pane whose shell is not ready yet; a pane
  * that stays occupied (seen live: a stray process attached to a new pane) is
- * replaced by a fresh one beside it. Returns the pane the agent runs in.
+ * replaced by a fresh one beside it. An agent stopped at a startup dialog is
+ * running: it is recorded and left for the Human to answer.
  */
 async function startAgent(deps, name, agent, paneId, args, fresh) {
-    for (let attempt = 1;; attempt++) {
+    const attempt = async (pane) => {
         try {
-            await deps.herdr.agentStart(name, agent, paneId, 60_000, args);
-            return paneId;
+            await deps.herdr.agentStart(name, agent, pane, 60_000, args);
+            return { paneId: pane, blocked: false };
+        }
+        catch (error) {
+            if (blockedAtStartup(error))
+                return { paneId: pane, blocked: true };
+            throw error;
+        }
+    };
+    for (let n = 1;; n++) {
+        try {
+            return await attempt(paneId);
         }
         catch (error) {
             if (!(error instanceof HerdrError) || error.code !== "agent_pane_busy")
                 throw error;
-            if (attempt < startRetry.attempts) {
+            if (n < startRetry.attempts) {
                 await new Promise((resolve) => setTimeout(resolve, startRetry.delayMs));
                 continue;
             }
@@ -122,8 +167,7 @@ async function startAgent(deps, name, agent, paneId, args, fresh) {
         deps.out(`pane ${paneId} is occupied; using ${other}`);
         // The new pane's shell needs the account's environment too.
         await fresh.ready(other);
-        await deps.herdr.agentStart(name, agent, other, 60_000, args);
-        return other;
+        return attempt(other);
     }
 }
 /** Close a seat's pane and record it. */

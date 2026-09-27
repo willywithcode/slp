@@ -34,10 +34,11 @@ theirs, and keep every Lead unblocked.
 
 ## The concept
 
-The Human's settled answers live in CONTEXT.md (path in \`slp status\`),
-outside the repository. Keep it short and current: what the project is, its
-terms, how it behaves, what it does not do. Ask the Human only what it does
-not already answer, with your recommendation.
+The Human's settled answers live in the project's concept, outside the
+repository: read it with \`slp context\`, rewrite it whole with
+\`slp context - <<'EOF' ... EOF\`. Keep it short and current: what the
+project is, its terms, how it behaves, what it does not do. Ask the Human
+only what it does not already answer, with your recommendation.
 
 ## Opening work
 
@@ -55,6 +56,10 @@ not already answer, with your recommendation.
 
 - Answer every ask the turn you see it: \`slp answer A3 "..."\`.
 - \`slp message L1 "..."\` to a Lead; \`slp status\` for the whole team.
+- A letter to a busy seat shows as queued in \`slp status\`: the watcher
+  (the Human's, in the pane below theirs) delivers it when the seat is free.
+  Nothing to do; never run \`slp watch\` yourself.
+- A seat that waits on a dialog in its pane needs the Human, never you.
 - A lane's REPORT ready arrives with its gate result. Acceptance met →
   \`slp close-lane L1 --land\`. A red gate is the Lead's to fix; override only
   with \`--over-gate --reason "..."\`. To stop a lane: \`slp close-lane L1 --drop
@@ -79,7 +84,7 @@ work did (not what it says), keep the lane one straight line.
 - Write, commit, merge or move branches, even to unblock: \`slp ask\` instead.
 - Widen the lane: new work or a missing prerequisite goes up as
   \`slp ask need "..."\`.
-- Edit CONTEXT.md: it is the Human's word.
+- Change the concept (\`slp context\` shows it): it is the Human's word.
 
 ## Briefing Peers
 
@@ -98,7 +103,7 @@ work did (not what it says), keep the lane one straight line.
 ## Judging hand-backs
 
 A HANDBACK lists outcome, changes, checks and what is left. Check the record
-(diff, test output), then:
+(\`slp diff L1-T1\` shows the change; \`slp diff L1\` the whole lane), then:
 \`slp accept L1-T1 ["note"]\` · \`slp rework L1-T1 "what to change and why"\` ·
 \`slp cut L1-T1 "why"\`.
 For a large or risky change, get a clean-context review first:
@@ -158,6 +163,12 @@ output; call nothing confirmed that you did not trace.
 - Edit, commit, or run anything that writes.
 - Soften or pad: no finding is a fine result.
 
+## Reading
+
+\`slp diff <target>\` (target from your REVIEW letter) shows the change; read
+files in your working copy directly. Other commands ask the Human first, so
+prefer reading; the gate runs the tests.
+
 ## Reporting
 
 \`slp done complete --finding "high|medium|low :: where :: what :: evidence"
@@ -170,14 +181,15 @@ output that shows it.
 ${SHARED}`,
     critic: `# slp guide: Critic
 
-You read one lane against the Human's own words and CONTEXT.md, once, and
+You read one lane against the Human's own words and the concept
+(\`slp context\`), once, and
 say where the two may not agree. You never see how the lane was reasoned out
 and you change nothing.
 
 Look only for:
 - missing: the Human asked for something the lane does not;
 - added: the lane asks for something the Human did not;
-- contradiction: the lane says the opposite of the Human or of CONTEXT.md;
+- contradiction: the lane says the opposite of the Human or of the concept;
 - ambiguity: the Human's words read two ways that would build different
   things, and the lane picked one silently (name both readings).
 

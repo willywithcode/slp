@@ -375,6 +375,63 @@ describe("roles and talk", () => {
   });
 });
 
+describe("concept, diff and help", () => {
+  it("the Supervisor writes the concept through slp; everyone reads it", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    w.cli.idleAll();
+    expect(await w.as("sup", ["context", "-"], "# Concept\n\ngreets people\n")).toBe(0);
+    expect(await w.as("L1", ["context"])).toBe(0);
+    expect(w.out.at(-1)).toContain("greets people");
+    await expect(w.as("L1", ["context", "-"], "mine now")).rejects.toThrow(/Only the Supervisor/);
+    await expect(w.as("sup", ["context", "-"], "  ")).rejects.toThrow(/empty/);
+    expect((await w.inbox("L1")).find((m) => m.includes("DIRECTIVE"))).toContain("slp context");
+  });
+
+  it("shows a task's and a lane's change", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    w.cli.idleAll();
+    await w.as("L1", ["start-task", "--title", "a", "--goal", "g", "--accept", "x", "--own", "src/a/**"]);
+    await commitFile(w.repo, "src/a/a.js", "export const a = 1;\n");
+    w.cli.idleAll();
+    await w.as("L1-T1", ["done", "complete", "--check", "ok", "done"]);
+    expect((await w.inbox("L1")).at(-1)).toContain("slp diff L1-T1");
+    await w.as("L1", ["diff", "L1-T1"]);
+    expect(w.out.at(-1)).toContain("+export const a = 1;");
+    await w.as("L1", ["diff", "L1"]);
+    expect(w.out.at(-1)).toContain("src/a/a.js");
+    await expect(w.as("L1", ["diff", "L9-T1"])).rejects.toThrow(/No task L9-T1/);
+    await expect(w.as("L1-T1", ["diff", "L1-T1"])).rejects.toThrow(/peer does not run/);
+  });
+
+  it("a seat asking for help gets its guide", async () => {
+    const w = await started();
+    await w.as("sup", ["open-lane", "--help"]);
+    expect(w.out.at(-1)).toContain("# slp guide: Supervisor");
+  });
+
+  it("finds the pane's shell even when Herdr shows a stray foreground process", async () => {
+    const w = await World.create();
+    const { shellLookup } = await import("../src/seats.js");
+    const original = shellLookup.processName;
+    shellLookup.processName = async (pid) => (pid === 1 ? "pwsh.exe" : null);
+    try {
+      w.cli.stray = "sh.exe";
+      await w.slp(["start"]);
+      expect(w.cli.ran.some((r) => r.command.startsWith("slp.cmd watch"))).toBe(true);
+    } finally {
+      shellLookup.processName = original;
+    }
+  });
+
+  it("keeps branch names tidy", async () => {
+    const w = await started();
+    await w.as("sup", ["open-lane", "--title", "greet(name) in src/greet.js with tests", "--outcome", "o", "--accept", "a", "--write", "src/**"]);
+    expect((await w.state()).lanes.get("L1")!.branch).toBe("lane/L1-greet-name-in-src-greet-js-with");
+  });
+});
+
 describe("stop", () => {
   it("refuses with open lanes unless forced, then closes every seat", async () => {
     const w = await started();

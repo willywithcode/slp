@@ -20,13 +20,31 @@ const HINTS = {
     FINDINGS: "Weigh the findings; decide with `slp accept`, `slp rework` or `slp cut`.",
     ASK: "Answer with `slp answer <ask> \"...\"`.",
     STILL_OPEN: "This ask is still open: answer it with `slp answer`.",
-    REPORT: "Close the lane with `slp close-lane` when acceptance is met (see `slp guide`).",
     CRITIQUE: "Weigh these against the lane; amend it with `slp amend-lane` or note why not.",
 };
+function reportHint(body) {
+    if (/ reports READY/.test(body))
+        return "Acceptance met and gate green: `slp close-lane <lane> --land` (see `slp guide`).";
+    if (body.startsWith("blocked:"))
+        return "Unblock the Lead: answer, amend the lane, or take it to the Human.";
+    return undefined;
+}
 export function envelope(l, body) {
     const where = [l.lane, l.task].filter(Boolean).join(" · ");
-    const hint = HINTS[l.letter];
+    const hint = l.letter === "REPORT" ? reportHint(body) : HINTS[l.letter];
     return `[SLP ${l.letter} #${l.seq} from ${l.from}${where ? ` · ${where}` : ""}]\n\n${body}${hint ? `\n\n[SLP] ${hint}` : ""}`;
+}
+/**
+ * Startup screens only the Human may answer: folder trust in Claude Code and
+ * Codex (texts seen live). Herdr may call such an agent idle (Codex), and a
+ * letter's Enter would pick the highlighted answer. Matched on the bottom of
+ * the screen only, so a conversation that mentions trust does not hold mail.
+ */
+const STARTUP_DIALOG = /Trust this folder\?|Trust and continue|Yes, I trust this folder|a project you created or one you trust|Do you trust the (?:files|contents)/i;
+export async function atStartupDialog(deps, paneId) {
+    const screen = await deps.herdr.agentRead(paneId).catch(() => "");
+    const bottom = screen.split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n");
+    return STARTUP_DIALOG.test(bottom);
 }
 export function watchLockPath(env, project) {
     return join(projectDir(env, project), "watch.lock");
@@ -82,6 +100,16 @@ async function deliver(deps, project, letter) {
         deps.out(`${letter.letter} #${letter.seq} recorded; ${letter.to} is busy, the watcher delivers it when it is free.`);
         return { seq: letter.seq, status: "queued" };
     }
+    if (await atStartupDialog(deps, target.paneId)) {
+        if (watching) {
+            await record(deps, project, letter.seq, false, null, "queued", "busy");
+            deps.out(`${letter.letter} #${letter.seq} recorded; ${letter.to} waits on a startup dialog only the Human answers. The watcher delivers it afterwards.`);
+            return { seq: letter.seq, status: "queued" };
+        }
+        await record(deps, project, letter.seq, false, "startup dialog on screen");
+        throw new SlpError(`${letter.letter} #${letter.seq} was recorded but NOT delivered: ${letter.to} (pane ${target.paneId}) waits on a ` +
+            `startup dialog only the Human answers. After that, \`slp redeliver ${letter.seq}\`.`);
+    }
     try {
         await handToAgent(deps, target.paneId, await render(deps, project, letter));
     }
@@ -130,6 +158,7 @@ export async function pump(deps, project) {
         byTarget.set(l.to, [...(byTarget.get(l.to) ?? []), l]);
     }
     let delivered = 0;
+    const atDialog = [];
     for (const [to, letters] of byTarget) {
         const target = state.seats.get(to);
         if (!target || !target.live)
@@ -137,6 +166,10 @@ export async function pump(deps, project) {
         const status = await deps.herdr.agentStatus(target.paneId).catch(() => null);
         if (status === "working" || status === "blocked")
             continue;
+        if (await atStartupDialog(deps, target.paneId)) {
+            atDialog.push(to);
+            continue;
+        }
         const claimed = [];
         for (const l of letters) {
             const ok = await append(deps.env, project, (events) => {
@@ -168,7 +201,7 @@ export async function pump(deps, project) {
             delivered += claimed.length;
         deps.out(error === null ? `delivered ${claimed.length} waiting letter(s) to ${to}` : `could not deliver waiting letters to ${to}: ${error}`);
     }
-    return delivered;
+    return { delivered, atDialog };
 }
 /** A relay claim younger than this is in flight; an older one was interrupted. */
 const RELAY_GRACE_MS = 60_000;
@@ -232,4 +265,13 @@ async function startsWorking(deps, paneId) {
             return false;
         await new Promise((resolve) => setTimeout(resolve, submitCheck.pollMs));
     }
+}
+/** Record a letter for the watcher to deliver once its target is free (a seat still at a startup dialog). */
+export async function queueLetter(deps, project, draft) {
+    const event = await append(deps.env, project, () => ({
+        kind: "letter", letter: draft.letter, from: draft.from, to: draft.to, text: draft.text,
+        lane: draft.lane ?? null, task: draft.task ?? null,
+    }));
+    await record(deps, project, event.seq, false, null, "queued", "busy");
+    return event.seq;
 }

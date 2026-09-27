@@ -12,9 +12,10 @@ import { Herdr } from "./herdr.js";
 import { projectHere, whoAmI } from "./identity.js";
 import { amendLane, openLane } from "./lanes.js";
 import { redeliver, watchLockPath } from "./letters.js";
-import { mayRun } from "./roles.js";
+import { writeAtomic } from "./core/fsutil.js";
+import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
-import { acceptTask, cutTask, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
+import { acceptTask, cutTask, diffOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
 import { closeLane, render, resendIntro, setProject, start, stop } from "./team.js";
 import { Watcher } from "./watcher.js";
 
@@ -52,7 +53,7 @@ type Arity = (n: number, m?: number) => void;
 
 /** Verbs only a seat runs; everything else is the Human's. */
 const SEAT_VERBS = new Set([
-  "whoami", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
+  "whoami", "context", "diff", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
   "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "done", "findings",
 ]);
 
@@ -60,7 +61,9 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS });
   const [command, ...args] = positionals;
   if (!command || values.help || command === "help") {
-    deps.out(USAGE);
+    // A seat asking for help gets its own guide, not the Human's usage.
+    const me = await whoAmI(deps.env).catch(() => null);
+    deps.out(me ? guide(me.seat.role) : USAGE);
     return command || values.help ? 0 : 2;
   }
   const text: TextArg = async (arg) => {
@@ -141,6 +144,22 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
   const { deps } = a;
   const list = (x: string[] | undefined) => (x ?? []).map((s) => s.trim()).filter(Boolean);
   switch (command) {
+    case "context": {
+      arity(0, 1);
+      const path = contextPath(deps.env, a.project.id);
+      if (args[0] === undefined && v.file === undefined) {
+        deps.out(await readFile(path, "utf8").catch(() => "(no concept written yet)"));
+        return 0;
+      }
+      if (!ROLE_SPECS[a.seat.role].editsContext) throw new SlpError("Only the Supervisor writes the concept; ask it with `slp ask`.");
+      const body = await text(args[0]);
+      if (!body.trim()) throw new SlpError("Refusing to write an empty concept.");
+      const lines = body.trimEnd().split(/\r?\n/);
+      await writeAtomic(path, `${lines.join("\n")}\n`);
+      deps.out(`concept written (${lines.length} lines)`);
+      return 0;
+    }
+    case "diff": arity(1); deps.out(await diffOf(a, args[0]!)); return 0;
     case "whoami":
       arity(0);
       deps.out(`${a.seat.name}: ${a.seat.role}${a.seat.lane ? ` in lane ${a.seat.lane}` : ""}${a.seat.task ? `, task ${a.seat.task}` : ""}` +

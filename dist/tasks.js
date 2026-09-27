@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
-import { contextPath } from "./core/project.js";
 import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto, removeWorktree } from "./git.js";
 import { matches, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
@@ -11,7 +10,7 @@ import { closeSeat, openSeat } from "./seats.js";
 import { fold } from "./state.js";
 const ACTIVE = new Set(["running", "handed-back", "rework"]);
 function slug(title) {
-    return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "task";
+    return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24).replace(/^-+|-+$/g, "") || "task";
 }
 export function laneOf(a) {
     const lane = a.seat.lane ? a.state.lanes.get(a.seat.lane) : undefined;
@@ -26,14 +25,14 @@ function taskOfLead(a, id) {
         throw new SlpError(`No task ${id} in lane ${lane.id}`);
     return task;
 }
-function brief(t, lane, context) {
+function brief(t, lane) {
     return [
         `Task ${t.id}: ${t.title}`, "", `Goal: ${t.goal}`, "", "Acceptance:", ...t.acceptance.map((x) => `- ${x}`), "",
         `You own (change only these): ${t.owned.join(", ")}`,
         ...(t.outOfScope.length ? ["Out of scope:", ...t.outOfScope.map((x) => `- ${x}`)] : []),
         ...(t.context.trim() ? ["", "Context:", t.context] : []),
         "", `Working copy: ${t.workdir}`, `Branch: ${t.branch} (commit here; never push, switch branches or merge)`,
-        "", `Lane ${lane.id} outcome, for context: ${lane.outcome}`, `The Human's concept (read-only): ${context}`,
+        "", `Lane ${lane.id} outcome, for context: ${lane.outcome}`, "The Human's concept: `slp context`",
     ].join("\n");
 }
 export async function startTask(a, config, input) {
@@ -94,7 +93,7 @@ export async function startTask(a, config, input) {
         branch, workdir, baseCommit: laneHead, seat: id,
     }));
     await sendLetter(deps, project.id, { letter: "TASK", from: a.seat.name, to: id, lane: lane.id, task: id,
-        text: brief(draft, lane, contextPath(deps.env, project.id)) });
+        text: brief(draft, lane) });
     return fold(await readLedger(deps.env, project.id)).tasks.get(id);
 }
 /** A Peer hands its task back to the Lead. */
@@ -130,7 +129,7 @@ export async function handBack(a, h) {
         `Changed: ${changed.join(", ") || "(nothing)"}`,
         ...(outside.length ? [`OUTSIDE owned paths (${task.owned.join(", ")}): ${outside.join(", ")}`] : []),
         ...(dirty.length ? [`Uncommitted: ${dirty.join(", ")}`] : []),
-        "", `Diff: git -C "${task.workdir}" diff ${task.baseCommit.slice(0, 10)}..${tip.slice(0, 10)}`,
+        "", `See the change: slp diff ${task.id}`,
     ].join("\n");
     await sendLetter(deps, project.id, { letter: "HANDBACK", from: a.seat.name, to: task.lane, lane: task.lane, task: task.id, text });
 }
@@ -138,6 +137,9 @@ async function finishSeat(a, task, reason) {
     const seat = a.state.seats.get(task.seat);
     if (seat?.live)
         await closeSeat(a.deps, a.project.id, seat, reason);
+    // A seat already gone may still leave its pane behind.
+    else if (seat)
+        await a.deps.herdr.paneClose(seat.paneId).catch(() => undefined);
 }
 export async function acceptTask(a, id, note) {
     const { deps, project } = a;
@@ -242,7 +244,7 @@ export async function startReview(a, config, target, focus) {
     }));
     await sendLetter(deps, project.id, { letter: "REVIEW", from: a.seat.name, to: id, lane: lane.id, task: target.task, text: [
             `Review ${what}`, "", "Acceptance:", ...acceptance.map((x) => `- ${x}`), "",
-            `The change: git -C "${cwd}" diff ${range}`, `Working copy: ${cwd} (read only)`,
+            `The change: slp diff ${target.task ?? lane.id}   (${range})`, `Working copy: ${cwd} (read only)`,
             ...(focus.trim() ? ["", `Focus: ${focus}`] : []),
         ].join("\n") });
 }
@@ -272,4 +274,29 @@ export async function finishReview(a, summary, findings) {
     // The watcher closes this seat once its turn ends (closing it here would
     // kill the agent in the middle of this command).
     a.deps.out("Review recorded and sent. You are done; this seat closes shortly.");
+}
+/** Show a task's or a lane's change, so Leads and Reviewers need no git of their own. */
+export async function diffOf(a, target) {
+    const lane = laneOf(a);
+    let cwd;
+    let range;
+    if (target === lane.id) {
+        cwd = lane.workdir;
+        range = `${lane.base}...${lane.branch}`;
+    }
+    else {
+        const task = a.state.tasks.get(target);
+        if (!task || task.lane !== lane.id)
+            throw new SlpError(`No task ${target} in lane ${lane.id} (or name the lane: ${lane.id})`);
+        const live = task.mode === "lane" || ACTIVE.has(task.state);
+        cwd = live ? task.workdir : lane.workdir;
+        range = `${task.baseCommit}..${task.lastDone?.head ?? (live ? "HEAD" : task.branch)}`;
+    }
+    const stat = await git(cwd, ["diff", "--stat", range]);
+    if (stat.code !== 0)
+        throw new SlpError(`git diff ${range} failed: ${stat.stderr.trim()}`);
+    const full = (await git(cwd, ["diff", range])).stdout;
+    const limit = 200_000;
+    return `$ git diff ${range}   (in ${cwd})\n\n${stat.stdout.trim() || "(no changes)"}\n\n` +
+        (full.length > limit ? `${full.slice(0, limit)}\n[slp] diff cut at ${limit} characters; read the files for the rest.` : full);
 }

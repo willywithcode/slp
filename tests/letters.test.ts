@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/core/config.js";
@@ -132,6 +132,68 @@ describe("seats", () => {
     w.cli.screens.clear();
     expect(await w.slp(["intro", "sup"])).toBe(0);
     expect(w.cli.promptsTo(sup)[0]).toContain("[SLP INTRO");
+  });
+
+  it("records a seat Herdr reports blocked at startup; the watcher introduces it once ready", async () => {
+    const w = await World.create();
+    await mkdir(join(w.home, "projects", w.project), { recursive: true });
+    const release = await holdWatch(w);
+    try {
+      const original = w.cli.exec;
+      w.cli.exec = async (file, args) => {
+        const r = await original(file, args);
+        if (args[0] === "agent" && args[1] === "start") {
+          w.cli.agents.get(args[args.indexOf("--pane") + 1]!)!.status = "blocked";
+          return { code: 1, stdout: "", stderr: JSON.stringify({ error: { code: "agent_not_ready", message: `agent ${args[2]} is blocked during startup and is not ready for prompts` } }) };
+        }
+        return r;
+      };
+      expect(await w.slp(["start"])).toBe(0);
+      const sup = await w.pane("sup");
+      expect(w.out.some((l) => l.includes("NEEDS ATTENTION") && l.includes("answer it yourself"))).toBe(true);
+      expect(w.cli.notifications.some((n) => n.title.includes("sup needs you"))).toBe(true);
+      await new Watcher(w.deps(null), w.project).tick();
+      expect(w.cli.promptsTo(sup)).toEqual([]);
+      expect(w.cli.keys).toEqual([]);
+      w.cli.idleAll(); // the Human answered the dialog
+      await new Watcher(w.deps(null), w.project).tick();
+      expect(w.cli.promptsTo(sup)[0]).toContain("[SLP INTRO");
+    } finally {
+      await release();
+    }
+  });
+
+  it("never types into a trust dialog Herdr calls idle (Codex, seen live)", async () => {
+    const w = await withLane();
+    const dialog = "  Folder access\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n  enter continue · esc quit";
+    const original = w.cli.exec;
+    w.cli.exec = async (file, args) => {
+      const r = await original(file, args);
+      if (args[0] === "agent" && args[1] === "start" && args.includes("codex")) w.cli.screens.set(args[args.indexOf("--pane") + 1]!, dialog);
+      return r;
+    };
+    // No watcher: the Lead is told plainly; nothing reaches the pane.
+    await expect(w.as("L1", ["start-task", "--title", "a", "--goal", "g", "--accept", "x", "--own", "src/a/**"])).rejects.toThrow(/startup dialog only the Human answers/);
+    const peer = await w.pane("L1-T1");
+    expect(w.cli.promptsTo(peer)).toEqual([]);
+    expect(w.cli.keys).toEqual([]);
+    expect(w.cli.notifications.some((n) => n.title.includes("L1-T1 needs you"))).toBe(true);
+
+    // With a watcher: letters wait, the Human is told once, delivery follows the answer.
+    const release = await holdWatch(w);
+    try {
+      await w.as("L1", ["message", "L1-T1", "one more thing"]);
+      const watcher = new Watcher(w.deps(null), w.project);
+      await watcher.tick();
+      await watcher.tick();
+      expect(w.cli.promptsTo(peer)).toEqual([]);
+      expect(w.cli.notifications.filter((n) => n.title.includes("L1-T1 waits on you"))).toHaveLength(1);
+      w.cli.screens.delete(peer);
+      await watcher.tick();
+      expect(w.cli.promptsTo(peer).at(-1)).toContain("one more thing");
+    } finally {
+      await release();
+    }
   });
 
   it("replaces a pane that stays busy and prepares the new one too", async () => {
