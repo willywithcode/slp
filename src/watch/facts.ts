@@ -21,6 +21,11 @@ function hash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 10);
 }
 
+/** The day of an ISO timestamp (or "" when missing). */
+function day(at: string): string {
+  return at.slice(0, 10);
+}
+
 function clip(text: string, max = 160): string {
   const one = text.replace(/\s+/g, " ").trim();
   return one.length > max ? `${one.slice(0, max)}…` : one;
@@ -42,6 +47,10 @@ const DESTRUCTIVE: RegExp[] = [
   /\btruncate\s+table\b/i,
 ];
 
+/** Commands that read or print, whose quoted arguments are text, not commands. */
+const READERS = /^\s*(rg|grep|egrep|git\s+(grep|log|show)|echo|printf|Select-String|findstr|Write-(Output|Host)|cat|type|head|tail)\b/i;
+/** A single- or double-quoted argument. */
+const QUOTED = /'[^']*'|"(?:[^"\\]|\\.)*"/g;
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[a-z0-9]+$|_test\.(go|py|rs)$|(^|\/)test_[^/]+\.py$/i;
 const ASSERTION = /\b(expect|assert\w*|should|t\.(Error|Fatal)\w*|require\.\w+)\b/;
 const SKIP = /\.(skip|only|todo)\(|\b(xit|xdescribe|xtest)\(|@pytest\.mark\.skip|\bt\.Skip\(|#\[ignore\]|@Disabled\b|@Ignore\b/;
@@ -73,7 +82,9 @@ export function stepFacts(steps: readonly Step[], ctx: FactContext): Fact[] {
   const facts: Fact[] = [];
   for (const s of steps) {
     if (s.kind === "command") {
-      if (DESTRUCTIVE.some((re) => re.test(s.text))) {
+      // A search or print command only mentions what it quotes.
+      const run = READERS.test(s.text) ? s.text.replace(QUOTED, "''") : s.text;
+      if (DESTRUCTIVE.some((re) => re.test(run))) {
         facts.push({ fact: "destructive", level: "page", key: `destructive:${s.at}:${hash(s.text)}`, text: `ran a destructive command: ${clip(s.text)}` });
       }
       if (/--no-verify\b/.test(s.text)) {
@@ -100,7 +111,8 @@ export function stepFacts(steps: readonly Step[], ctx: FactContext): Fact[] {
       if (ctx.owned) {
         const outside = files.filter((f) => !matches(ctx.owned!, f));
         if (outside.length) {
-          facts.push({ fact: "outside_owned", level: "attend", key: `outside_owned:${outside.sort().join(",")}`, text: `edited outside its owned paths (${ctx.owned.join(", ")}): ${outside.join(", ")}` });
+          // Once per file set per day: a repeat days later is news, every edit of the same files is not.
+          facts.push({ fact: "outside_owned", level: "attend", key: `outside_owned:${day(s.at)}:${outside.sort().join(",")}`, text: `edited outside its owned paths (${ctx.owned.join(", ")}): ${outside.join(", ")}` });
         }
       }
     }
@@ -123,8 +135,9 @@ export function stuckFact(steps: readonly Step[]): Fact | null {
   for (const c of commands) counts.set(c.text.trim(), (counts.get(c.text.trim()) ?? 0) + 1);
   for (const [command, n] of counts) {
     if (n >= 3) {
-      const last = commands.filter((c) => c.text.trim() === command).at(-1)!;
-      return { fact: "stuck", level: "attend", key: `stuck:${hash(command)}:${last.at}`, text: `repeats the same command (${n} of its last ${commands.length}): ${clip(command, 120)}` };
+      // One incident per repeated command per hour, however long the loop runs.
+      const first = commands.find((c) => c.text.trim() === command)!;
+      return { fact: "stuck", level: "attend", key: `stuck:${hash(command)}:${first.at.slice(0, 13)}`, text: `repeats the same command (${n} of its last ${commands.length}): ${clip(command, 120)}` };
     }
   }
   return null;

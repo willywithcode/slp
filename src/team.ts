@@ -2,7 +2,7 @@ import { stat, writeFile } from "node:fs/promises";
 import type { Config } from "./core/config.js";
 import type { Deps } from "./core/deps.js";
 import { SlpError } from "./core/errors.js";
-import { append, nextId, readLedger } from "./core/ledger.js";
+import { append, nextId, readLedger, type EventOf } from "./core/ledger.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { contextPath, ensureProject, saveProject, type Project } from "./core/project.js";
 import { detectGate } from "./gate.js";
@@ -13,7 +13,7 @@ import { dropLane } from "./lanes.js";
 import { sendLetter, watchLockPath } from "./letters.js";
 import { closeSeat, detectShell, moveSeat, openSeat } from "./seats.js";
 import { codexHomes } from "./watch/observer.js";
-import { codexSessionId, findCodexRollout } from "./watch/transcripts.js";
+import { codexSessionId, findCodexRollout, humanWordsSince } from "./watch/transcripts.js";
 import { fold, liveSeats, type State } from "./state.js";
 import type { Actor } from "./tasks.js";
 
@@ -133,9 +133,23 @@ export async function closeLane(a: Actor, laneId: string, how: { land: boolean; 
   if ((how.overGate || how.overRisk) && !how.reason.trim()) throw new SlpError("Landing over a red gate or a risk hold needs --reason \"...\" (the Human's words).");
   const events = await readLedger(a.deps.env, a.project.id);
   if (pendingRequests(events).some((r) => r.lane === laneId)) throw new SlpError(`Lane ${laneId} has a gate or landing in progress.`);
+  let note = how.reason;
+  if (how.overRisk) {
+    // Lifting a hold is the Human's call (ADR 0015): it needs a hold, and the
+    // Human's own words to the Supervisor since then, which go on the record.
+    const held = events.findLast((e): e is EventOf<"request-done"> => e.kind === "request-done" && e.detail.startsWith("held for the Human") &&
+      events.some((r) => r.kind === "request" && r.request === e.request && r.lane === laneId));
+    if (!held) throw new SlpError(`${laneId} has not been held. Land it without --over-risk; slp says if it holds it for the Human.`);
+    const sup = a.state.seats.get("sup");
+    const words = sup?.sessionId ? await humanWordsSince(a.deps.env, sup.sessionId, held.ts).catch(() => []) : [];
+    if (!words.length) {
+      throw new SlpError(`slp found no words from the Human since ${laneId} was held (${held.ts}). Show them the reason; land over the hold only once they agree here.`);
+    }
+    note = `${how.reason}\n\nThe Human, after the hold:\n${words.map((w) => `> ${w.replace(/\n/g, "\n> ")}`).join("\n")}`;
+  }
   const req = await append(a.deps.env, a.project.id, (evs) => ({
     kind: "request" as const, request: nextId(evs, "request", "Q"), what: "land" as const, lane: laneId, by: a.seat.name,
-    note: how.reason, overGate: how.overGate, ...(how.overRisk ? { overRisk: true } : {}),
+    note, overGate: how.overGate, ...(how.overRisk ? { overRisk: true } : {}),
   }));
   const watching = await lockHeldByLiveProcess(watchLockPath(a.deps.env, a.project.id));
   a.deps.out(`Landing ${laneId} (${req.request}): the watcher merges ${lane.base} in, runs the gate and lands it; a LANDED or REPORT letter follows.` +

@@ -1,4 +1,8 @@
-export const calibration = { minMarks: 5, precision: 0.8 };
+/**
+ * A threshold needs enough marks overall, both kinds among them (or there is
+ * nothing to separate), and enough useful readings at or above it.
+ */
+export const calibration = { minMarks: 5, minNoise: 2, minUsefulAbove: 3, precision: 0.8 };
 /** A shadow reading's question and subject, from its incident key `jev:<point>.<question>:<subject>`. */
 function parseKey(key) {
     const m = /^jev:([a-z_]+)\.([A-Za-z0-9_]+):(.+)$/.exec(key);
@@ -46,11 +50,17 @@ export function calibrate(events, budgetPerDay) {
         if (marked.length < calibration.minMarks) {
             reason = `needs ${calibration.minMarks - marked.length} more mark(s)`;
         }
+        else if (noise.length < calibration.minNoise) {
+            reason = `needs ${calibration.minNoise - noise.length} more noise mark(s) to tell readings apart`;
+        }
         else {
             const candidates = [...new Set(marked.map((r) => r.confidence))].filter((c) => c >= 0.5).sort((a, b) => a - b);
             for (const t of candidates) {
                 const above = marked.filter((r) => r.confidence >= t);
-                const precise = above.filter((r) => r.verdict === "useful").length / above.length >= calibration.precision;
+                const usefulAbove = above.filter((r) => r.verdict === "useful").length;
+                if (usefulAbove < calibration.minUsefulAbove)
+                    break;
+                const precise = usefulAbove / above.length >= calibration.precision;
                 const perDay = all.filter((r) => r.confidence >= t).length / days;
                 if (precise && perDay <= budgetPerDay) {
                     threshold = t;

@@ -21,6 +21,8 @@ export interface Step {
   added?: string[];
   /** Results: true when the tool reported a failure, null when unknown. */
   failed?: boolean | null;
+  /** Pairs a tool call with its result (Claude tool_use id, Codex call_id). */
+  ref?: string;
 }
 
 // ---------------------------------------------------------------- Claude Code
@@ -29,6 +31,10 @@ type Json = Record<string, any>;
 
 function lines(text: unknown): string[] {
   return typeof text === "string" && text ? text.split(/\r?\n/) : [];
+}
+
+function ref(id: unknown): { ref?: string } {
+  return typeof id === "string" && id ? { ref: id } : {};
 }
 
 function textOf(content: unknown): string {
@@ -46,7 +52,7 @@ export function claudeSteps(line: Json): Step[] {
     if (typeof content === "string") return [{ at, kind: "user", text: content }];
     if (!Array.isArray(content)) return [];
     return content.flatMap((b: Json): Step[] => {
-      if (b?.type === "tool_result") return [{ at, kind: "result", text: textOf(b.content), failed: b.is_error === true ? true : b.is_error === false ? false : null }];
+      if (b?.type === "tool_result") return [{ at, kind: "result", text: textOf(b.content), failed: b.is_error === true ? true : b.is_error === false ? false : null, ...ref(b.tool_use_id) }];
       if (b?.type === "text" && typeof b.text === "string") return [{ at, kind: "user", text: b.text }];
       return [];
     });
@@ -56,14 +62,15 @@ export function claudeSteps(line: Json): Step[] {
     if (b?.type === "text" && typeof b.text === "string") return [{ at, kind: "say", text: b.text }];
     if (b?.type !== "tool_use") return [];
     const input: Json = b.input ?? {};
-    if (b.name === "Bash" && typeof input.command === "string") return [{ at, kind: "command", text: input.command }];
+    const id = ref(b.id);
+    if (b.name === "Bash" && typeof input.command === "string") return [{ at, kind: "command", text: input.command, ...id }];
     if ((b.name === "Edit" || b.name === "Write" || b.name === "NotebookEdit") && typeof input.file_path === "string") {
       return [{ at, kind: "edit", text: `${b.name} ${input.file_path}`, files: [input.file_path],
-        removed: lines(input.old_string), added: lines(input.new_string ?? input.content ?? input.new_source) }];
+        removed: lines(input.old_string), added: lines(input.new_string ?? input.content ?? input.new_source), ...id }];
     }
     if (b.name === "MultiEdit" && typeof input.file_path === "string" && Array.isArray(input.edits)) {
       return [{ at, kind: "edit", text: `MultiEdit ${input.file_path}`, files: [input.file_path],
-        removed: input.edits.flatMap((e: Json) => lines(e.old_string)), added: input.edits.flatMap((e: Json) => lines(e.new_string)) }];
+        removed: input.edits.flatMap((e: Json) => lines(e.old_string)), added: input.edits.flatMap((e: Json) => lines(e.new_string)), ...id }];
     }
     return [];
   });
@@ -90,28 +97,43 @@ export function parsePatch(patch: string): { files: string[]; removed: string[];
   return { files, removed, added };
 }
 
+/** One apply_patch body, file by file. */
+export function parsePatchFiles(patch: string): { file: string; removed: string[]; added: string[] }[] {
+  const out: { file: string; removed: string[]; added: string[] }[] = [];
+  for (const l of patch.split(/\r?\n/)) {
+    const file = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(l)?.[1];
+    if (file) out.push({ file: file.trim(), removed: [], added: [] });
+    else if (!out.length) continue;
+    else if (l.startsWith("+") && !l.startsWith("+++")) out.at(-1)!.added.push(l.slice(1));
+    else if (l.startsWith("-") && !l.startsWith("---")) out.at(-1)!.removed.push(l.slice(1));
+  }
+  return out;
+}
+
 /** Commands and patches inside one Codex tool call (code-mode `exec`, or the older shell/apply_patch calls). */
-function codexCall(name: string, input: string, at: string): Step[] {
+function codexCall(name: string, input: string, at: string, id: { ref?: string }): Step[] {
   const steps: Step[] = [];
   const patchAt = input.indexOf("*** Begin Patch");
   if (patchAt >= 0) {
     // In code mode the patch sits in a string literal; unescape it first.
     const literal = /"((?:[^"\\]|\\.)*\*\*\* Begin Patch(?:[^"\\]|\\.)*)"/.exec(input)?.[1];
     const patch = (literal !== undefined ? unquote(literal) : null) ?? input.slice(patchAt);
-    const p = parsePatch(patch);
-    if (p.files.length) steps.push({ at, kind: "edit", text: `apply_patch ${p.files.join(", ")}`, ...p });
+    // One step per file, so each file's lines are judged on their own.
+    for (const p of parsePatchFiles(patch)) {
+      steps.push({ at, kind: "edit", text: `apply_patch ${p.file}`, files: [p.file], removed: p.removed, added: p.added, ...id });
+    }
   }
   if (name === "exec" || name === "exec_command" || name === "shell") {
     for (const m of input.matchAll(/\bcmd\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
       const cmd = unquote(m[1]!);
-      if (cmd !== null) steps.push({ at, kind: "command", text: cmd });
+      if (cmd !== null) steps.push({ at, kind: "command", text: cmd, ...id });
     }
     if (!steps.some((s) => s.kind === "command")) {
       // Older calls: {"command": ["bash", "-lc", "..."]} or {"cmd": "..."} as JSON arguments.
       try {
         const args = JSON.parse(input) as Json;
         const cmd = Array.isArray(args.command) ? args.command.at(-1) : args.cmd ?? args.command;
-        if (typeof cmd === "string") steps.push({ at, kind: "command", text: cmd });
+        if (typeof cmd === "string") steps.push({ at, kind: "command", text: cmd, ...id });
       } catch { /* not JSON */ }
     }
   }
@@ -132,12 +154,12 @@ export function codexSteps(line: Json): Step[] {
   }
   if (p.type === "custom_tool_call" || p.type === "function_call") {
     const input = typeof p.input === "string" ? p.input : typeof p.arguments === "string" ? p.arguments : "";
-    return codexCall(String(p.name ?? ""), input, at);
+    return codexCall(String(p.name ?? ""), input, at, ref(p.call_id));
   }
   if (p.type === "custom_tool_call_output" || p.type === "function_call_output") {
     const out = typeof p.output === "string" ? p.output : textOf(p.output);
     const code = /(?:exit code|exited with code|Process exited with code)[:\s]+(-?\d+)/i.exec(out)?.[1];
-    return [{ at, kind: "result", text: out, failed: code === undefined ? null : code !== "0" }];
+    return [{ at, kind: "result", text: out, failed: code === undefined ? null : code !== "0", ...ref(p.call_id) }];
   }
   return [];
 }
@@ -217,6 +239,16 @@ export class TranscriptTail {
 
   constructor(readonly path: string, private readonly parse: (line: Json) => Step[]) {}
 
+  /** Everything up to the current end, however large (next() reads at most 32 MiB at a time). */
+  async all(): Promise<Step[]> {
+    const steps: Step[] = [];
+    for (;;) {
+      const before = this.offset;
+      steps.push(...await this.next());
+      if (this.offset === before) return steps;
+    }
+  }
+
   async next(): Promise<Step[]> {
     const info = await stat(this.path).catch(() => null);
     if (!info) return [];
@@ -265,7 +297,7 @@ export async function codexSessionId(path: string): Promise<string | null> {
 export async function humanWordsSince(env: Env, sessionId: string, since: string): Promise<string[]> {
   const path = await findClaudeTranscript(env, sessionId);
   if (!path) return [];
-  const steps = await new TranscriptTail(path, (line) => (line.isMeta ? [] : claudeSteps(line))).next();
+  const steps = await new TranscriptTail(path, (line) => (line.isMeta ? [] : claudeSteps(line))).all();
   const from = Date.parse(since);
   return steps
     .filter((s) => s.kind === "user" && Date.parse(s.at) >= from)

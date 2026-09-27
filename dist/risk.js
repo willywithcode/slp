@@ -12,9 +12,32 @@ export function laneRisky(lane) {
     const path = lane.writeSet.find((g) => RISKY_PATHS.test(g));
     return path ? `its write set covers ${path}` : null;
 }
-export function laneReviewed(state, lane) {
-    return [...state.reviews.values()].some((r) => r.lane === lane && r.target === lane && r.done && !r.done.summary.startsWith("not run"));
+/**
+ * Whether the lane's work up to `upTo` had a review of the whole lane: a
+ * finished lane review of exactly that commit, or one followed only by slp's
+ * own merges of the base branch.
+ */
+export async function laneReviewed(root, state, lane, upTo) {
+    for (const r of state.reviews.values()) {
+        if (r.lane !== lane.id || r.target !== lane.id || !r.done || r.done.summary.startsWith("not run") || !r.head)
+            continue;
+        if (r.head === upTo)
+            return true;
+        if ((await git(root, ["merge-base", "--is-ancestor", r.head, upTo])).code !== 0)
+            continue;
+        const since = (await git(root, ["log", "--format=%s", `${r.head}..${upTo}`])).stdout.split("\n").filter(Boolean);
+        if (since.every((subject) => subject === `Merge ${lane.base} into ${lane.branch}`))
+            return true;
+    }
+    return false;
 }
+/** SQL that removes stored data: drops, truncates, and deletes without a WHERE. */
+const DESTRUCTIVE_SQL = [
+    /\bdrop\s+(table|column|database|schema|index)\b/i,
+    /\btruncate\s+(table\s+)?\w+/i,
+    /\balter\s+table\s+\S+\s+drop\b/i,
+    /\bdelete\s+from\s+[\w."`[\]]+\s*(;|$|["'`)])/i,
+];
 /**
  * What in a diff could lose stored data (catalogue 16): migrations and
  * destructive SQL. Deleted source files are not counted: git keeps them and
@@ -27,7 +50,7 @@ export async function dataLossSigns(cwd, from, to) {
     if (migrations.length)
         signs.push(`it changes migrations: ${migrations.slice(0, 5).join(", ")}`);
     const added = (await git(cwd, ["diff", "-U0", `${from}..${to}`])).stdout.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++"));
-    const sql = added.find((l) => /\b(drop\s+(table|column|database|schema|index)|truncate\s+table|delete\s+from\s+\w+\s*;?\s*$|alter\s+table\s+\w+\s+drop)\b/i.test(l));
+    const sql = added.find((l) => DESTRUCTIVE_SQL.some((re) => re.test(l)));
     if (sql)
         signs.push(`it adds destructive SQL: ${sql.slice(1).trim().slice(0, 120)}`);
     return signs;

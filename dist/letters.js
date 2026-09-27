@@ -42,7 +42,10 @@ export function envelope(l, body) {
  */
 const STARTUP_DIALOG = /Trust this folder\?|Trust and continue|Yes, I trust this folder|a project you created or one you trust|Do you trust the (?:files|contents)/i;
 export async function atStartupDialog(deps, paneId) {
-    const screen = await deps.herdr.agentRead(paneId).catch(() => "");
+    // A screen that cannot be read might show a dialog: hold rather than type blind.
+    const screen = await deps.herdr.agentRead(paneId).catch(() => null);
+    if (screen === null)
+        return true;
     const bottom = screen.split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n");
     return STARTUP_DIALOG.test(bottom);
 }
@@ -89,10 +92,15 @@ async function deliver(deps, project, letter) {
         status = await deps.herdr.agentStatus(target.paneId);
     }
     catch (error) {
-        if (unreachable(error) && watching) {
-            await record(deps, project, letter.seq, false, describe(error), "queued", "unreachable");
-            deps.out(`${letter.letter} #${letter.seq} recorded; the watcher will deliver it within seconds. Nothing else to do.`);
-            return { seq: letter.seq, status: "queued" };
+        if (unreachable(error)) {
+            if (watching) {
+                await record(deps, project, letter.seq, false, describe(error), "queued", "unreachable");
+                deps.out(`${letter.letter} #${letter.seq} recorded; the watcher will deliver it within seconds. Nothing else to do.`);
+                return { seq: letter.seq, status: "queued" };
+            }
+            await record(deps, project, letter.seq, false, describe(error));
+            throw new SlpError(`${letter.letter} #${letter.seq} was recorded but NOT delivered to ${letter.to}: this terminal cannot reach Herdr ` +
+                "and no watcher runs; start `slp start` (or `slp watch`) outside any sandbox.");
         }
     }
     if (watching && (status === "working" || status === "blocked")) {
@@ -113,8 +121,8 @@ async function deliver(deps, project, letter) {
             return { seq: letter.seq, status: "queued" };
         }
         await record(deps, project, letter.seq, false, "startup dialog on screen");
-        throw new SlpError(`${letter.letter} #${letter.seq} was recorded but NOT delivered: ${letter.to} (pane ${target.paneId}) waits on a ` +
-            `startup dialog only the Human answers. After that, \`slp redeliver ${letter.seq}\`.`);
+        throw new SlpError(`${letter.letter} #${letter.seq} was recorded but NOT delivered: ${letter.to} (pane ${target.paneId}) shows a ` +
+            `startup dialog only the Human answers, or its screen could not be read. Once it is clear, \`slp redeliver ${letter.seq}\`.`);
     }
     try {
         await handToAgent(deps, target.paneId, await render(deps, project, letter));

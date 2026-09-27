@@ -242,9 +242,10 @@ export async function startReview(a, config, target, focus) {
         what = `lane ${lane.id}: ${lane.title}\nOutcome: ${lane.outcome}`;
         acceptance = lane.acceptance;
     }
+    const reviewHead = target.task ? await head(cwd).catch(() => undefined) : await head(project.root, lane.branch);
     const started = await append(deps.env, project.id, (events) => {
         const id = `${lane.id}-R${[...fold(events).reviews.values()].filter((r) => r.lane === lane.id).length + 1}`;
-        return { kind: "review-start", lane: lane.id, review: id, target: target.task ?? lane.id, focus, seat: id };
+        return { kind: "review-start", lane: lane.id, review: id, target: target.task ?? lane.id, focus, seat: id, head: reviewHead };
     });
     const id = started.review;
     const text = [

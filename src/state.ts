@@ -85,6 +85,7 @@ export interface Review {
   target: string;
   focus: string;
   seat: string;
+  head: string | null;
   done: EventOf<"review-done"> | null;
 }
 
@@ -204,7 +205,7 @@ export function fold(events: readonly SlpEvent[]): State {
         break;
       }
       case "review-start":
-        s.reviews.set(e.review, { id: e.review, lane: e.lane, target: e.target, focus: e.focus, seat: e.seat, done: null });
+        s.reviews.set(e.review, { id: e.review, lane: e.lane, target: e.target, focus: e.focus, seat: e.seat, head: e.head ?? null, done: null });
         break;
       case "review-done": {
         const r = s.reviews.get(e.review);

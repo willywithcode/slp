@@ -17,7 +17,7 @@ const T = "2026-09-27T10:00:00.000Z";
 const claude = {
   bash: (command: string) => ({ type: "assistant", timestamp: T, message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } }),
   edit: (file: string, old_string: string, new_string: string) => ({ type: "assistant", timestamp: T, message: { content: [{ type: "tool_use", id: "t2", name: "Edit", input: { file_path: file, old_string, new_string } }] } }),
-  result: (text: string, is_error = false) => ({ type: "user", timestamp: T, message: { content: [{ type: "tool_result", tool_use_id: "t1", content: text, is_error }] } }),
+  result: (text: string, is_error = false, id = "t1") => ({ type: "user", timestamp: T, message: { content: [{ type: "tool_result", tool_use_id: id, content: text, is_error }] } }),
   apiError: (text: string) => ({ type: "assistant", timestamp: T, isApiErrorMessage: true, message: { content: [{ type: "text", text }] } }),
 };
 const codex = {
@@ -30,7 +30,7 @@ const jsonl = (lines: object[]) => lines.map((l) => JSON.stringify(l)).join("\n"
 
 describe("transcript readers", () => {
   it("reads Claude Code steps", () => {
-    expect(claudeSteps(claude.bash("npm test"))).toEqual([{ at: T, kind: "command", text: "npm test" }]);
+    expect(claudeSteps(claude.bash("npm test"))).toEqual([{ at: T, kind: "command", text: "npm test", ref: "t1" }]);
     expect(claudeSteps(claude.edit("/r/a.ts", "x\ny", "z"))[0]).toMatchObject({ kind: "edit", files: ["/r/a.ts"], removed: ["x", "y"], added: ["z"] });
     expect(claudeSteps(claude.result("boom", true))[0]).toMatchObject({ kind: "result", failed: true });
     expect(claudeSteps(claude.apiError("You've hit your limit · resets 3pm"))[0]).toMatchObject({ kind: "error" });
@@ -178,8 +178,13 @@ describe("the watch", () => {
     const lead = (await w.state()).seats.get("L1")!;
     const dir = join(w.home, "claude", "projects", "some-project");
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${lead.sessionId}.jsonl`), jsonl([claude.edit(join(w.repo, "src", "a", "x.js"), "a", "b")]));
-    await new Watcher(w.deps(null), w.project).tick();
+    // A refused edit changed nothing: no incident.
+    await writeFile(join(dir, `${lead.sessionId}.jsonl`), jsonl([claude.edit(join(w.repo, "src", "a", "x.js"), "a", "b"), claude.result("denied", true, "t2")]));
+    const watcher = new Watcher(w.deps(null), w.project);
+    await watcher.tick();
+    expect((await w.state()).incidents).toEqual([]);
+    await appendFile(join(dir, `${lead.sessionId}.jsonl`), jsonl([claude.edit(join(w.repo, "src", "a", "x.js"), "a", "b"), claude.result("ok", false, "t2")]));
+    await watcher.tick();
     expect((await w.state()).incidents.map((i) => [i.seat, i.fact, i.to])).toEqual([["L1", "lead_wrote", "sup"]]);
   });
 

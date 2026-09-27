@@ -77,6 +77,8 @@ export const EventSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("review-start"), ...base, lane: z.string(), review: z.string(), target: z.string(),
     focus: text, seat: z.string(),
+    // The commit the review looks at (a review covers work up to it).
+    head: z.string().optional(),
   }),
   z.object({
     kind: z.literal("review-done"), ...base, review: z.string(), summary: text,

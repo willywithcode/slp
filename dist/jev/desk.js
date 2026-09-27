@@ -99,8 +99,11 @@ export class JevDesk {
                 this.turns.delete(name);
                 continue;
             }
-            if ([...state.asks.values()].some((a) => a.from === name && a.answer === null))
+            // Waiting on an answer is not idling: the clock starts again once it comes.
+            if ([...state.asks.values()].some((a) => a.from === name && a.answer === null)) {
+                turn.at = this.now();
                 continue;
+            }
             const idle = this.now() - turn.at;
             if (!turn.nudged && idle >= deskTiming.nudgeMs) {
                 turn.nudged = true;
@@ -250,9 +253,13 @@ export async function criticPrefilter(deps, project, config, lane, concept) {
     const reading = await consult(deps, project, config, "critic", lane.id, { humanWords: clip(lane.humanWords, 4000), concept: clip(concept, 4000), acceptance: lane.acceptance }, criticQuestions(lane.acceptance));
     if (!reading)
         return null;
+    // Only a calibrated first pass reaches the Critic; in shadow it is recorded, not shown.
+    const threshold = config.jev.thresholds["critic.prefilter"];
+    if (config.jev.mode !== "on" || threshold === undefined)
+        return null;
     const lines = lane.acceptance.flatMap((item, i) => {
         const a = reading.answers[`item_${i + 1}`];
-        return a && a.choice !== "none" && a.choice !== "unsure" ? [`- "${item}": possibly ${a.choice} (${a.confidence.toFixed(2)})`] : [];
+        return a && a.choice !== "none" && a.choice !== "unsure" && a.confidence >= threshold ? [`- "${item}": possibly ${a.choice} (${a.confidence.toFixed(2)})`] : [];
     });
     return lines.length ? `A machine first pass (Jev) flagged these; check them yourself, they may be wrong:\n${lines.join("\n")}` : null;
 }

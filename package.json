@@ -1,19 +1,28 @@
 {
   "name": "slp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Supervisor/Lead/Peer rooms for coding agents on top of Herdr",
+  "description": "A Supervisor, Leads and Peers working on your repository as coding agents on Herdr",
   "license": "Apache-2.0",
   "type": "module",
-  "engines": { "node": ">=22.0.0" },
-  "bin": { "slp": "dist/bin.js" },
-  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "slp": "dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": { "zod": "4.4.3" },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
   "devDependencies": {
     "@types/node": "22.19.15",
     "typescript": "5.9.3",

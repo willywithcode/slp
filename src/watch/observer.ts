@@ -22,6 +22,10 @@ export const observeTiming = {
   longTurnMs: 20 * 60_000,
   /** Steps kept per seat for window facts (stuck, unverified). */
   window: 400,
+  /** An edit whose result never shows up counts as made after this long. */
+  editResultMs: 60_000,
+  /** A hand-back is checked without its transcript once it is this old. */
+  handbackWaitMs: 10 * 60_000,
 };
 
 interface Watched {
@@ -31,6 +35,8 @@ interface Watched {
   steps: Step[];
   screenAt: number;
   workingSince: number | null;
+  /** Edits waiting for their tool result. */
+  pending: { step: Step; at: number }[];
 }
 
 const ACCOUNT = new Set(["usage_limit", "auth_failed"]);
@@ -64,10 +70,26 @@ export class Observer {
       if (fresh.length) w.steps = [...w.steps, ...fresh].slice(-observeTiming.window);
       const facts: Fact[] = [];
       const worker = ROLE_SPECS[seat.role].watched;
-      const found = stepFacts(fresh, this.context(state, seat));
-      facts.push(...found.filter((f) => worker || ACCOUNT.has(f.fact)).map((f) => (seat.role === "lead" ? leadWrote(f) : f)));
+      const ctx = this.context(state, seat);
+      // An edit counts once its result shows it happened: a refused edit changed nothing.
+      const ready: Step[] = [];
       for (const step of fresh) {
-        if (step.kind === "error" && !found.some((f) => ACCOUNT.has(f.fact) && f.key.endsWith(step.at))) {
+        if (step.kind === "edit" && step.ref) { w.pending.push({ step, at: this.now() }); continue; }
+        if (step.kind === "result" && step.ref) {
+          const done = w.pending.filter((p) => p.step.ref === step.ref).map((p) => p.step);
+          w.pending = w.pending.filter((p) => p.step.ref !== step.ref);
+          if (step.failed === true) w.steps = w.steps.filter((x) => !(x.kind === "edit" && x.ref === step.ref));
+          else ready.push(...done);
+        }
+        ready.push(step);
+      }
+      const stale = w.pending.filter((p) => this.now() - p.at >= observeTiming.editResultMs);
+      w.pending = w.pending.filter((p) => !stale.includes(p));
+      ready.push(...stale.map((p) => p.step));
+      const found = stepFacts(ready, ctx).map((f) => (ACCOUNT.has(f.fact) ? this.accountKey(seat, f) : f));
+      facts.push(...found.filter((f) => worker || ACCOUNT.has(f.fact)).map((f) => (seat.role === "lead" ? leadWrote(f) : f)));
+      for (const step of ready) {
+        if (step.kind === "error" && !stepFacts([step], ctx).some((f) => ACCOUNT.has(f.fact))) {
           await this.hooks.unknownError?.(project, state, config, seat, step);
         }
       }
@@ -89,12 +111,20 @@ export class Observer {
           w.screenAt = this.now();
           const screen = await this.deps.herdr.agentRead(seat.paneId).catch(() => "");
           const f = screenFact(screen);
-          if (f) facts.push(f);
+          if (f) facts.push(this.accountKey(seat, f));
         }
       }
       for (const f of facts) await raise(this.deps, project.id, state, config, seat, f);
     }
     await this.ledgerShapes(project, state, config);
+  }
+
+  /**
+   * One account problem, one incident: the transcript and the screen report
+   * the same limit, so both share a key per seat session and day.
+   */
+  private accountKey(seat: Seat, f: Fact): Fact {
+    return { ...f, key: `${f.fact}:${seat.name}:${seat.openedAt}:${new Date(this.now()).toISOString().slice(0, 10)}` };
   }
 
   private context(state: State, seat: Seat): { owned: readonly string[] | null; workdir: string } {
@@ -110,7 +140,7 @@ export class Observer {
     const key = `${seat.paneId}:${seat.openedAt}`;
     let w = this.seats.get(seat.name);
     if (!w || w.key !== key) {
-      w = { key, tail: null, lookedAt: 0, steps: [], screenAt: 0, workingSince: null };
+      w = { key, tail: null, lookedAt: 0, steps: [], screenAt: 0, workingSince: null, pending: [] };
       this.seats.set(seat.name, w);
     }
     if (!w.tail && this.now() - w.lookedAt >= observeTiming.lookupMs) {
@@ -136,9 +166,12 @@ export class Observer {
       const lead = leadOf(state, task.lane);
       const peer = state.seats.get(task.seat);
       const done = task.lastDone;
-      if (done && done.outcome === "complete" && !this.checkedDone.has(`${done.seq}`)) {
+      const known = peer ? this.seats.get(peer.name) : undefined;
+      // Check once the Peer's transcript has been read, or give up waiting for it.
+      const readable = Boolean(known?.tail) || (done !== null && this.now() - Date.parse(done.ts) > observeTiming.handbackWaitMs);
+      if (done && done.outcome === "complete" && readable && !this.checkedDone.has(`${done.seq}`)) {
         this.checkedDone.add(`${done.seq}`);
-        const steps = peer ? this.seats.get(peer.name)?.steps : undefined;
+        const steps = known?.steps;
         const f = steps?.length ? unverifiedFact(steps, task.id) : null;
         if (f && peer) await raise(this.deps, project.id, state, config, peer, f);
       }

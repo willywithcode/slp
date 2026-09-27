@@ -180,3 +180,76 @@ describe("delivery", () => {
     expect(w.cli.keys).toEqual([]);
   });
 });
+
+describe("second review round", () => {
+  it("facts: quoted text in searches, per-file patches, stable stuck keys", async () => {
+    const { stepFacts, stuckFact } = await import("../src/watch/facts.js");
+    const { codexSteps } = await import("../src/watch/transcripts.js");
+    const exec = (cmd: string, at: string) => ({ timestamp: at, type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "c", input: `tools.exec_command({cmd:${JSON.stringify(cmd)}})` } });
+    const ctx = { owned: ["src/**"], workdir: "/r" };
+    expect(stepFacts(codexSteps(exec("rg 'git reset --hard' docs", "t")), ctx)).toEqual([]);
+    expect(stepFacts(codexSteps(exec("git reset --hard", "t")), ctx).map((f) => f.fact)).toEqual(["destructive"]);
+    // A patch that removes an assert from product code and touches a test is not a weakened test.
+    const patch = "*** Begin Patch\n*** Update File: src/a.js\n-  assert(x);\n*** Update File: src/a.test.js\n+  it('more', () => {});\n*** End Patch";
+    const steps = codexSteps({ timestamp: "t", type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "p", input: `const p = ${JSON.stringify(patch)};` } });
+    expect(steps.map((s) => s.files)).toEqual([["src/a.js"], ["src/a.test.js"]]);
+    expect(stepFacts(steps, ctx).map((f) => f.fact)).not.toContain("test_weakened");
+    // The same loop keeps one key as it goes on.
+    const loop = (n: number) => Array.from({ length: n }, (_, i) => codexSteps(exec("npm test", `2026-09-27T10:0${i}:00Z`))).flat();
+    expect(stuckFact(loop(3))!.key).toBe(stuckFact(loop(5))!.key);
+  });
+
+  it("destructive SQL: deletes without WHERE, with or without a semicolon", async () => {
+    const w = await World.create();
+    const { dataLossSigns } = await import("../src/risk.js");
+    const base = sh(w.repo, "rev-parse", "HEAD");
+    await commitFile(w.repo, "src/db.js", "db.run('DELETE FROM users;');\n");
+    expect((await dataLossSigns(w.repo, base, "HEAD")).join()).toMatch(/destructive SQL/);
+    const base2 = sh(w.repo, "rev-parse", "HEAD");
+    await commitFile(w.repo, "src/db2.js", "db.run('DELETE FROM users WHERE id = ?', [id]);\n");
+    expect(await dataLossSigns(w.repo, base2, "HEAD")).toEqual([]);
+  });
+
+  it("a lane review covers only the work it saw", async () => {
+    const w = await started();
+    await w.as("sup", ["open-lane", "--title", "Auth tokens", "--outcome", "rotate auth tokens", "--accept", "a", "--write", "src/**"]);
+    w.cli.idleAll();
+    await w.as("L1", ["start-task", "--title", "a", "--goal", "g", "--accept", "x", "--own", "src/a/**"]);
+    await commitFile(w.repo, "src/a/a.js", "a\n");
+    w.cli.idleAll();
+    await w.as("L1-T1", ["done", "complete", "--check", "ok", "done"]);
+    await w.as("L1", ["accept", "L1-T1"]);
+    await w.as("L1", ["start-review", "--lane"]);
+    w.cli.idleAll();
+    await w.as("L1-R1", ["done", "complete", "looked at all of it"]);
+    // More work after the review.
+    await w.as("L1", ["start-task", "--title", "b", "--goal", "g", "--accept", "x", "--own", "src/b/**"]);
+    await commitFile(w.repo, "src/b/b.js", "b\n");
+    w.cli.idleAll();
+    await w.as("L1-T2", ["done", "complete", "--check", "ok", "done"]);
+    await w.as("L1", ["accept", "L1-T2"]);
+    await w.as("sup", ["close-lane", "L1", "--land"]);
+    await watchOnce(w);
+    expect((await w.inbox("sup")).at(-1)).toMatch(/held for the Human: it is a high-risk lane/);
+    // A fresh lane review of the current work lifts it.
+    w.cli.idleAll();
+    await w.as("L1", ["start-review", "--lane"]);
+    w.cli.idleAll();
+    await w.as("L1-R2", ["done", "complete", "looked again"]);
+    await w.as("sup", ["close-lane", "L1", "--land"]);
+    await watchOnce(w);
+    expect((await w.state()).lanes.get("L1")!.landed).toBe(true);
+  });
+
+  it("an unreadable screen holds letters rather than typing blind", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    const lead = await w.pane("L1");
+    w.cli.idleAll();
+    const original = w.cli.exec;
+    w.cli.exec = async (file, args) => (args[0] === "agent" && args[1] === "read" ? { code: 1, stdout: "", stderr: "{\"error\":{\"code\":\"read_failed\",\"message\":\"x\"}}" } : original(file, args));
+    const before = w.cli.promptsTo(lead).length;
+    await expect(w.as("sup", ["message", "L1", "hi"])).rejects.toThrow(/startup dialog/);
+    expect(w.cli.promptsTo(lead).length).toBe(before);
+  });
+});

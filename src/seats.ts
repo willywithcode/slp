@@ -246,7 +246,9 @@ export async function moveSeat(deps: Deps, project: Project, config: Config, sea
     started = await startAgent(deps, herdrName(project.id, seat.name), launcher.agent, paneId, args, { cwd: move.cwd, env: paneEnv, ready });
   } catch (error) {
     await append(deps.env, project.id, () => ({ kind: "seat-stop" as const, name: seat.name, reason: `move to ${move.launcher} failed: ${describe(error)}` }));
-    throw error;
+    // The old agent is already closed (one agent per session), so the seat is gone.
+    throw new SlpError(`Moving ${seat.name} to ${move.launcher} failed (${describe(error)}); its old pane was already closed. ` +
+      (seat.task ? `Its Lead cuts ${seat.task} and starts it again.` : "Open the seat again (for a Lead: drop and reopen the lane, or ask the Human)."));
   }
   await append(deps.env, project.id, () => ({
     kind: "seat" as const, name: seat.name, role: seat.role, lane: seat.lane, task: seat.task, launcher: move.launcher,

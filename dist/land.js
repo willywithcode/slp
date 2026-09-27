@@ -88,25 +88,31 @@ async function land(deps, project, state, lane, req) {
     // the gate tests the result, and the squash goes on top of it. If the base
     // moves meanwhile, the update below refuses rather than undo those commits.
     const baseHead = await head(root, lane.base);
-    const upToDate = (await git(root, ["merge-base", "--is-ancestor", baseHead, lane.branch])).code === 0;
+    const lanePre = await head(root, lane.branch);
+    const upToDate = (await git(root, ["merge-base", "--is-ancestor", baseHead, lanePre])).code === 0;
     if (!upToDate) {
         const merged = await mergeInto(lane.workdir, baseHead, `Merge ${lane.base} into ${lane.branch}`);
         if (!merged.ok)
             return fail(`${lane.base} conflicts with the lane in ${merged.conflicts.join(", ")}; a Peer must reconcile them`, true);
     }
+    // Pin the lane too: exactly this commit is tested, scanned and landed.
+    const tip = await head(root, lane.branch);
     const gate = await gateFor(deps, project, state, lane);
     if (gate && !gate.result.ok && !req.overGate)
         return fail(`the gate is red.\n\n${gateText(gate)}`, true);
+    if ((await head(root, lane.branch)) !== tip)
+        return fail(`the lane changed while it was being landed; land it again`, true);
     // Risk holds (catalogue 6, 16): code rules first; Jev may add a hold once calibrated.
     if (!req.overRisk) {
         const holds = [];
         const risky = laneRisky(lane);
-        if (risky && !laneReviewed(state, lane.id))
-            holds.push(`it is a high-risk lane (${risky}) and has had no review of the whole lane (its Lead: \`slp start-review --lane\`)`);
-        holds.push(...await dataLossSigns(root, baseHead, lane.branch));
+        if (risky && !(await laneReviewed(root, state, lane, lanePre))) {
+            holds.push(`it is a high-risk lane (${risky}) and its current work has had no review of the whole lane (its Lead: \`slp start-review --lane\`)`);
+        }
+        holds.push(...await dataLossSigns(root, baseHead, tip));
         const config = await loadConfig(deps.env).catch(() => null);
-        const diff = (await git(root, ["diff", "-U2", `${baseHead}..${lane.branch}`])).stdout;
-        const reading = config ? await consult(deps, project.id, config, "landing", `${lane.id}@${await head(root, lane.branch)}`, { lane: { title: lane.title, outcome: lane.outcome }, diff: diff.length > 20_000 ? `${diff.slice(0, 20_000)}\n…` : diff }, LANDING) : null;
+        const diff = (await git(root, ["diff", "-U2", `${baseHead}..${tip}`])).stdout;
+        const reading = config ? await consult(deps, project.id, config, "landing", `${lane.id}@${tip}`, { lane: { title: lane.title, outcome: lane.outcome }, diff: diff.length > 20_000 ? `${diff.slice(0, 20_000)}\n…` : diff }, LANDING) : null;
         if (reading?.trusted("data_loss_risk", "yes"))
             holds.push(`Jev reads a data-loss risk (${reading.answers.data_loss_risk.confidence.toFixed(2)})`);
         if (holds.length) {
@@ -116,10 +122,11 @@ async function land(deps, project, state, lane, req) {
         }
     }
     let commit = baseHead;
-    if ((await treeOf(root, lane.branch)) !== (await treeOf(root, baseHead))) {
+    if ((await treeOf(root, tip)) !== (await treeOf(root, baseHead))) {
         const message = `${lane.title}\n\n${lane.outcome}\n\nLanded by slp from lane ${lane.id} (${lane.branch}).` +
-            (req.overGate ? `\nLanded over a red gate: ${req.note}` : "");
-        commit = await squashCommit(root, lane.branch, baseHead, message);
+            (req.overGate ? `\nLanded over a red gate: ${req.note}` : "") +
+            (req.overRisk ? `\nLanded over a risk hold: ${req.note}` : "");
+        commit = await squashCommit(root, tip, baseHead, message);
         const moved = async () => (await head(root, lane.base)) !== baseHead;
         if (await moved())
             return fail(`${lane.base} moved while the lane was being landed; land it again`, false);

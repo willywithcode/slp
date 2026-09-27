@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfig, type Config } from "../src/core/config.js";
@@ -161,19 +161,24 @@ describe("calibration", () => {
     expect(r!.separation).toBeGreaterThan(0);
     expect(calibrate(events.slice(0, 9), 20)[0]).toMatchObject({ threshold: null, reason: expect.stringMatching(/more mark/) });
     expect(calibrate(events, 0.1)[0]!.threshold).toBeNull();
+    // Only useful marks: nothing to tell apart.
+    events.length = 0;
+    [0.95, 0.9, 0.88, 0.8, 0.7, 0.6].forEach((c, i) => reading(`u${i}`, c, "useful", i));
+    expect(calibrate(events, 20)[0]).toMatchObject({ threshold: null, reason: expect.stringMatching(/noise mark/) });
   });
 
   it("slp calibrate saves them; the Human can list and mark incidents", async () => {
     const w = await World.create();
     await w.slp(["start"]);
     const env = { SLP_HOME: w.home };
-    for (let i = 0; i < 5; i++) {
-      await append(env, w.project, () => ({ kind: "jev" as const, point: "turn", subject: `s${i}`, mode: "shadow" as const, answers: { stuck_q: { choice: "yes", confidence: 0.9 } }, acted: false }));
+    for (let i = 0; i < 7; i++) {
+      const confidence = i < 5 ? 0.9 : 0.6;
+      await append(env, w.project, () => ({ kind: "jev" as const, point: "turn", subject: `s${i}`, mode: "shadow" as const, answers: { stuck_q: { choice: "yes", confidence } }, acted: false }));
       await append(env, w.project, () => ({ kind: "incident" as const, incident: `I${i + 1}`, key: `jev:turn.stuck_q:s${i}`, seat: "sup", fact: "jev:turn.stuck_q", level: "note" as const, text: "t", to: null }));
     }
     expect(await w.slp(["incidents"], null)).toBe(0);
-    expect(w.out.at(-1)).toContain("I5 [note] sup");
-    for (let i = 1; i <= 5; i++) expect(await w.slp(["ack", `I${i}`, "useful"], null)).toBe(0);
+    expect(w.out.at(-1)).toContain("I7 [note] sup");
+    for (let i = 1; i <= 7; i++) expect(await w.slp(["ack", `I${i}`, i <= 5 ? "useful" : "noise"], null)).toBe(0);
     expect((await w.state()).acks.every((a) => a.by === "human")).toBe(true);
     expect(await w.slp(["calibrate"], null)).toBe(0);
     const saved = JSON.parse(await readFile(join(w.home, "config.json"), "utf8")) as Config;
@@ -203,9 +208,16 @@ describe("landing holds (catalogue 6, 16)", () => {
     expect((await w.state()).lanes.get("L1")!.open).toBe(true);
     w.cli.idleAll();
     await expect(w.as("sup", ["close-lane", "L1", "--land", "--over-risk"])).rejects.toThrow(/--reason/);
+    // The Supervisor cannot lift a hold on its own: the Human must have spoken since.
+    await expect(w.as("sup", ["close-lane", "L1", "--land", "--over-risk", "--reason", "the Human agreed"])).rejects.toThrow(/no words from the Human since L1 was held/);
+    const sup = (await w.state()).seats.get("sup")!;
+    const dir = join(w.home, "claude", "projects", "p");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${sup.sessionId}.jsonl`), JSON.stringify({ type: "user", timestamp: new Date(Date.now() + 1000).toISOString(), message: { content: "yes, land it: the legacy column is unused" } }) + "\n");
     await w.as("sup", ["close-lane", "L1", "--land", "--over-risk", "--reason", "the Human agreed: legacy column is unused"]);
     await w.slp(["watch", "--once", "--project", w.project]);
     expect((await w.state()).lanes.get("L1")!.landed).toBe(true);
     expect(sh(w.repo, "log", "-1", "--format=%s", "main")).toBe("Password reset");
+    expect(sh(w.repo, "log", "-1", "--format=%b", "main")).toContain("> yes, land it: the legacy column is unused");
   });
 });
