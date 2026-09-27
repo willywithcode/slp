@@ -13,6 +13,10 @@ Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
 - [0004](0004-agent-launch-permissions.md) Agents get permission for `slp` only
 - [0005](0005-watch-alert-policy.md) Watch alert policy
 - [0006](0006-rename-to-slp.md) Rename spl to slp
+- [0007](0007-slp-roles-and-authority.md) SLP roles and authority
+- [0008](0008-lanes-and-landing.md) Lanes, working copies and landing
+- [0009](0009-watch-and-jev.md) Watch from transcripts; Jev as sensor and System 1
+- [0010](0010-team-rules-location.md) Team rules live in seat prompts and the mustang skill
 
 ## Add A Decision When
 
