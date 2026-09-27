@@ -64,6 +64,11 @@ export function envelope(l: Pick<Letter, "seq" | "letter" | "from" | "lane" | "t
  */
 const STARTUP_DIALOG = /Trust this folder\?|Trust and continue|Yes, I trust this folder|a project you created or one you trust|Do you trust the (?:files|contents)/i;
 
+/** Whether a screen's bottom shows a startup dialog. */
+export function showsStartupDialog(screen: string): boolean {
+  return STARTUP_DIALOG.test(screen.split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n"));
+}
+
 /** What a pane's screen says about typing into it now. */
 export async function screenState(deps: Deps, paneId: string): Promise<"clear" | "dialog" | "unreadable"> {
   const screen = await deps.herdr.agentRead(paneId).catch(() => null);

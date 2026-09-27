@@ -1,6 +1,6 @@
 import { SlpError } from "./core/errors.js";
 import { append } from "./core/ledger.js";
-import { atStartupDialog, sendLetter } from "./letters.js";
+import { sendLetter, showsStartupDialog } from "./letters.js";
 import { leadOf } from "./state.js";
 // Permission prompts (ADR 0016, after seatworks' `permit`): while the Human
 // is out of the loop, the Supervisor answers a seat's permission prompt for
@@ -34,10 +34,11 @@ export async function permit(a, config, name, allow, why) {
         throw new SlpError(`No live seat "${name}"`);
     if (seat.name === a.seat.name)
         throw new SlpError("Your own prompts are the Human's.");
+    // One read, judged and answered at once: the key goes to exactly the screen that was checked.
     const screen = await a.deps.herdr.agentRead(seat.paneId).catch(() => null);
     if (screen === null)
         throw new SlpError(`Cannot read ${name}'s screen; nothing was pressed.`);
-    if (await atStartupDialog(a.deps, seat.paneId))
+    if (showsStartupDialog(screen))
         throw new SlpError(`${name} shows a startup dialog (folder trust): only the Human answers that.`);
     const prompt = permissionPrompt(screen);
     if (!prompt)

@@ -58,6 +58,9 @@ Tradeoffs:
 - Out of the loop, an agent (the Supervisor) grants permissions to agents;
   each grant is on the record and its Lead hears of it. Set
   `"inLoop": true` to keep them all.
+- On Windows the shim runs through a `git.cmd` launcher: cmd.exe expands
+  `%NAME%` text inside arguments (a commit message quoting `%PATH%`), as it
+  does for every npm `.cmd` wrapper. A seat can commit with `-F <file>`.
 - On Windows, Claude seats are not sandboxed, so they still ask for what is
   not pre-allowed; Codex seats need their account's Windows sandbox set up
   once, or their commands fail.

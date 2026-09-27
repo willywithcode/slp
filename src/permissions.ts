@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Role } from "./core/ledger.js";
@@ -124,5 +125,6 @@ export async function writeGitShim(env: Env, role: Role): Promise<string> {
 
 /** Whether a PATH entry is one of slp's shim directories (slp's own git calls skip them). */
 export function isShimDir(entry: string): boolean {
-  return /[\\/]bin[\\/](supervisor|lead|peer|reviewer|critic)[\\/]?$/i.test(entry) && /slp/i.test(entry);
+  // The shim's own script marks its directory, wherever slp's home is.
+  return entry !== "" && existsSync(join(entry, "git-shim.mjs"));
 }

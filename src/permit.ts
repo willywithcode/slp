@@ -2,7 +2,7 @@ import type { Config } from "./core/config.js";
 import type { Deps } from "./core/deps.js";
 import { SlpError } from "./core/errors.js";
 import { append } from "./core/ledger.js";
-import { atStartupDialog, sendLetter } from "./letters.js";
+import { sendLetter, showsStartupDialog } from "./letters.js";
 import { leadOf } from "./state.js";
 import type { Actor } from "./tasks.js";
 
@@ -39,9 +39,10 @@ export async function permit(a: Actor, config: Config, name: string, allow: bool
   const seat = a.state.seats.get(name);
   if (!seat?.live) throw new SlpError(`No live seat "${name}"`);
   if (seat.name === a.seat.name) throw new SlpError("Your own prompts are the Human's.");
+  // One read, judged and answered at once: the key goes to exactly the screen that was checked.
   const screen = await a.deps.herdr.agentRead(seat.paneId).catch(() => null);
   if (screen === null) throw new SlpError(`Cannot read ${name}'s screen; nothing was pressed.`);
-  if (await atStartupDialog(a.deps, seat.paneId)) throw new SlpError(`${name} shows a startup dialog (folder trust): only the Human answers that.`);
+  if (showsStartupDialog(screen)) throw new SlpError(`${name} shows a startup dialog (folder trust): only the Human answers that.`);
   const prompt = permissionPrompt(screen);
   if (!prompt) throw new SlpError(`${name} is not showing a permission prompt; nothing was pressed.`);
   // Claude Code highlights "1. Yes" (Enter takes it); Codex takes "y"; Esc refuses in both.

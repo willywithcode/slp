@@ -34,7 +34,7 @@ describe("role permissions", () => {
 
 describe("the git shim", () => {
   async function shim(role: "lead" | "peer") {
-    const dir = await writeGitShim({ SLP_HOME: await tempDir() }, role);
+    const dir = await writeGitShim({ SLP_HOME: await tempDir("home-") }, role);
     const run = (args: string[]) => spawnSync(process.execPath, [join(dir, "git-shim.mjs"), ...args],
       { encoding: "utf8", env: { ...process.env, SLP_GIT_DENY: gitDenied(role).join(",") } });
     return { dir, run };
