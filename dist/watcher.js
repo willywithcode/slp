@@ -1,222 +1,199 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
-import { foldCases } from "./cases.js";
-import { describe, handToAgent, relay } from "./commands.js";
-import { decision } from "./jev.js";
-import { appendEvent, readEvents } from "./log.js";
-import { loadRoom, RoomGoneError, roomDir, writeAtomic } from "./room.js";
-import { evaluate } from "./watch.js";
-const ObservationSchema = z.object({
-    status: z.enum(["idle", "done", "working", "blocked", "unknown", "gone"]),
-    stateChangeSeq: z.number().nullable(),
-    since: z.number(),
-});
-const StateSchema = z.record(z.string(), ObservationSchema);
-const READY = new Set(["idle", "done"]);
-/** Delivery rounds per alert before giving up (each round tries every channel). */
-export const MAX_ALERT_ROUNDS = 5;
-/** Jev requests per pass, so one pass stays short (each may take up to 15 s). */
-export const MAX_ASSESSMENTS_PER_PASS = 3;
-/**
- * One watcher pass: observe Herdr, persist observations (so durations survive
- * restarts and `--once` runs), record new alerts, deliver every alert no
- * channel has delivered yet, and only then spend time on Jev. Recording before
- * delivering means a crash or a Herdr outage delays an alert instead of losing it.
- */
-export async function watchTick(deps, room, config, jev) {
-    const current = await loadRoom(deps.env, room.name);
-    if (!current)
-        throw new RoomGoneError(`Room "${room.name}" does not exist (it may have been archived by \`slp down\`)`);
-    if (current.workspaceId !== room.workspaceId || current.createdAt !== room.createdAt) {
-        throw new RoomGoneError(`Room "${room.name}" was replaced by a newer room with the same name`);
+import { GoneError } from "./core/errors.js";
+import { append, readLedger } from "./core/ledger.js";
+import { loadProject } from "./core/project.js";
+import { loadConfig } from "./core/config.js";
+import { pendingRequests, runRequest } from "./land.js";
+import { teardownLane } from "./lanes.js";
+import { describe, pump, sendLetter } from "./letters.js";
+import { closeSeat } from "./seats.js";
+import { fold, liveSeats, superiorOf } from "./state.js";
+import { JevDesk } from "./jev/desk.js";
+import { Observer } from "./watch/observer.js";
+// The watcher (ADR 0009): code, not a seat. It relays waiting letters, runs
+// gates and landings, and keeps the team moving with a few plain rules.
+// Phase 4 adds transcript facts and incidents; Jev (ADR 0013) is optional.
+export const watchTiming = {
+    /** A seat stuck on a prompt in its pane this long is reported. */
+    blockedMs: 3 * 60_000,
+    /** An unanswered ask is reminded after this long, then as often again. */
+    askReminderMs: 10 * 60_000,
+    askReminders: 3,
+    /** Ticks a live seat's pane may be missing from Herdr before it counts as gone. */
+    goneTicks: 3,
+};
+export class Watcher {
+    deps;
+    projectId;
+    inflight = null;
+    blockedSince = new Map();
+    blockedTold = new Set();
+    missing = new Map();
+    /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
+    dialogTold = new Set();
+    observer;
+    desk;
+    /** The last ledger event handed to the decision points. */
+    seen = 0;
+    constructor(deps, projectId) {
+        this.deps = deps;
+        this.projectId = projectId;
+        this.desk = new JevDesk(deps);
+        this.observer = new Observer(deps, {
+            turnEnded: (project, state, config, seat, steps) => this.desk.turnEnded(project, state, config, seat, steps),
+            unknownError: (project, state, config, seat, step) => this.desk.unknownError(project, state, config, seat, step),
+        });
     }
-    // Deliver messages that senders inside agent sandboxes could only queue.
-    for (const view of foldCases(await readEvents(deps.env, room.name)).values()) {
-        for (const seq of view.queued)
-            await relay(deps, room, view.messages.find((m) => m.seq === seq));
-    }
-    const now = deps.now?.() ?? Date.now();
-    const observed = await observe(deps, room, now);
-    const raised = [];
-    for (const alert of evaluate({ room, events: await readEvents(deps.env, room.name), observed, now }, config)) {
-        const event = await recordAlert(deps, room, alert, (current) => evaluate({ room, events: current, observed, now }, config).some((a) => a.key === alert.key));
-        if (event)
-            raised.push(event);
-    }
-    await deliverPending(deps, room);
-    if (jev && jev.mode !== "off") {
-        raised.push(...await assess(deps, room, config, jev, now));
-        await deliverPending(deps, room);
-    }
-    return raised;
-}
-class Duplicate extends Error {
-}
-/**
- * Append an alert unless its key is already recorded or `stillValid` rejects
- * the current log (both checked under the log lock).
- */
-async function recordAlert(deps, room, alert, stillValid) {
-    const event = await appendEvent(deps.env, room.name, (events) => {
-        if (events.some((e) => e.kind === "alert" && e.key === alert.key))
-            throw new Duplicate();
-        if (stillValid && !stillValid(events))
-            throw new Duplicate();
-        return { kind: "alert", ...alert };
-    }, room).catch((error) => {
-        if (error instanceof Duplicate)
-            return null;
-        throw error;
-    });
-    if (event)
-        deps.out(`alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}: ${alert.text}`);
-    return event;
-}
-async function deliverPending(deps, room) {
-    const events = await readEvents(deps.env, room.name);
-    for (const alert of events.filter((e) => e.kind === "alert")) {
-        const attempts = events.filter((e) => e.kind === "delivery" && e.ref === alert.seq);
-        const rounds = attempts.filter((e) => e.kind === "delivery" && e.channel === "notification").length;
-        if (attempts.some((e) => e.kind === "delivery" && e.ok) || rounds >= MAX_ALERT_ROUNDS)
-            continue;
-        await deliverAlert(deps, room, alert);
-    }
-}
-/**
- * Ask Jev about cases whose communication changed since their last
- * assessment, once a handback exists. Each state (case, last message seq) is
- * assessed at most once, failed requests included: no retries (ADR 0005). In
- * alert mode a recorded drift for a case's current state always has an alert,
- * including one recorded in shadow mode or before a crash.
- */
-async function assess(deps, room, config, jev, now) {
-    const events = await readEvents(deps.env, room.name);
-    const assessed = new Map();
-    for (const e of events)
-        if (e.kind === "assessment")
-            assessed.set(`${e.case}:${e.upTo}`, e);
-    const raised = [];
-    let budget = MAX_ASSESSMENTS_PER_PASS;
-    // Oldest current state first, so cases that change often cannot starve
-    // the others under the per-pass budget.
-    const views = [...foldCases(events).values()].sort((a, b) => a.messages.at(-1).seq - b.messages.at(-1).seq);
-    for (const view of views) {
-        const upTo = view.messages.at(-1).seq;
-        const evidence = caseEvidence(view, now, config);
-        if (!evidence)
-            continue;
-        let assessment = assessed.get(`${view.id}:${upTo}`) ?? null;
-        if (!assessment) {
-            if (budget-- <= 0)
+    now() { return this.deps.now?.() ?? Date.now(); }
+    /** One pass. Throws GoneError when the project no longer exists. */
+    async tick() {
+        const project = await loadProject(this.deps.env, this.projectId);
+        if (!project)
+            throw new GoneError(`Project ${this.projectId} does not exist`);
+        const pumped = await pump(this.deps, project.id);
+        for (const seat of pumped.atDialog) {
+            if (this.dialogTold.has(seat))
                 continue;
-            const answers = await jev.evaluate(evidence, new AbortController().signal).catch(() => null);
-            const verdict = decision(answers, evidence, jev.threshold);
-            const summary = answers && Object.fromEntries(Object.entries(answers).map(([k, a]) => [k, { choice: a.choice, confidence: a.confidence }]));
-            // Under the lock: a concurrent watcher may have assessed this state already.
-            assessment = await appendEvent(deps.env, room.name, (current) => {
-                if (current.some((e) => e.kind === "assessment" && e.case === view.id && e.upTo === upTo))
-                    throw new Duplicate();
-                return { kind: "assessment", case: view.id, upTo, mode: jev.mode === "alert" ? "alert" : "shadow", verdict, answers: summary };
-            }, room).catch((error) => {
-                if (error instanceof Duplicate)
-                    return null;
-                throw error;
+            this.dialogTold.add(seat);
+            await this.deps.herdr.notify(`slp: ${seat} waits on you`, "A startup dialog (folder trust) in its pane needs the Human; its letters wait.").catch(() => undefined);
+        }
+        for (const seat of pumped.unreadable) {
+            if (this.dialogTold.has(seat))
+                continue;
+            this.dialogTold.add(seat);
+            await this.deps.herdr.notify(`slp: cannot read ${seat}'s screen`, "Its letters wait until slp can see the pane is clear (Herdr may be busy).").catch(() => undefined);
+        }
+        const waiting = [...pumped.atDialog, ...pumped.unreadable];
+        for (const seat of [...this.dialogTold])
+            if (!waiting.includes(seat))
+                this.dialogTold.delete(seat);
+        this.startRequest(project, await readLedger(this.deps.env, project.id));
+        const state = fold(await readLedger(this.deps.env, project.id));
+        await this.tidy(project, state);
+        const agents = await this.deps.herdr.agentList().catch(() => null);
+        if (agents) {
+            const status = new Map(agents.map((a) => [a.paneId, a.status]));
+            await this.checkPanes(project, state, status);
+            await this.retire(project, state, status);
+            const config = await loadConfig(this.deps.env).catch((error) => {
+                this.deps.out(`watch: ${describe(error)}`);
+                return null;
             });
-            if (!assessment)
+            if (config) {
+                await this.observer.observe(project, state, config, status);
+                await this.desk.timers(project, state, status);
+                const events = await readLedger(this.deps.env, project.id);
+                const fresh = events.filter((e) => e.seq > this.seen);
+                this.seen = events.at(-1)?.seq ?? this.seen;
+                await this.desk.events(project, state, config, fresh, (seat) => this.observer.steps(seat));
+            }
+        }
+        await this.remindAsks(project, state);
+    }
+    /** A lane closed while its seats still run (a drop cut short by a crash): finish closing it. */
+    async tidy(project, state) {
+        if (this.inflight)
+            return; // a landing in progress tidies its own lane
+        for (const lane of state.lanes.values()) {
+            if (lane.open || !liveSeats(state).some((s) => s.lane === lane.id))
                 continue;
-            deps.out(`assessed ${view.id} up to seq ${upTo}: ${verdict}`);
+            const problems = await teardownLane(this.deps, project, lane, state);
+            this.deps.out(`closed the seats of ${lane.id}, which was already closed${problems.length ? `; ${problems.join("; ")}` : ""}`);
         }
-        if (jev.mode !== "alert" || assessment.verdict !== "drift" || !assessment.answers)
-            continue;
-        const judged = Object.entries(assessment.answers).map(([k, a]) => `${k}: ${a.choice} ${a.confidence.toFixed(2)}`).join(", ");
-        const alert = await recordAlert(deps, room, {
-            key: `jev:${view.id}:${upTo}`, rule: "jev-drift", case: view.id, member: null,
-            text: `Jev judged the communication on ${view.id} (up to seq ${upTo}) as protocol drift (${judged}). ` +
-                `This is a model judgment, not proof; review \`slp log ${view.id}\`.`,
-        }, (current) => foldCases(current).get(view.id)?.messages.at(-1)?.seq === upTo);
-        if (alert)
-            raised.push(alert);
     }
-    return raised;
-}
-/** Evidence for the latest handback of a case, or null before any handback. */
-export function caseEvidence(view, now, config) {
-    const handback = view.messages.findLast((m) => m.kind === "handback");
-    if (!handback)
-        return null;
-    const brief = view.messages.findLast((m) => m.kind !== "handback" && m.to === handback.from && m.seq < handback.seq);
-    const last = view.messages.at(-1);
-    return {
-        leadId: view.lead,
-        peerId: handback.from,
-        case: view.id,
-        brief: brief?.text ?? "",
-        handback: handback.text,
-        roomMessages: view.messages.filter((m) => m.kind !== "handback" && m.seq > handback.seq)
-            .map((m) => ({ seq: m.seq, from: m.from, to: m.to, text: m.text })),
-        uncertainRoomMessages: [],
-        pendingDelayElapsed: now - Date.parse(last.ts) > config.leadIdleMs,
-        incompleteCommunication: view.undelivered.length > 0,
-    };
-}
-async function observe(deps, room, now) {
-    const agents = await deps.herdr.agentList();
-    const statePath = join(roomDir(deps.env, room.name), "watch.json");
-    const previous = await loadState(statePath);
-    const observed = {};
-    for (const [name, member] of Object.entries(room.members)) {
-        const agent = agents.find((a) => a.paneId === member.paneId);
-        // A different kind in the pane means the member was replaced. Without a
-        // kind the occupant cannot be attributed: its state is unknown.
-        const status = !agent || (agent.kind !== null && agent.kind !== member.kind) ? "gone"
-            : agent.kind === null ? "unknown" : toStatus(agent.status);
-        const stateChangeSeq = status === "gone" ? null : agent.stateChangeSeq;
-        const prev = previous[name];
-        // Same Herdr episode keeps its start time. idle <-> done is only Herdr's
-        // "seen" flag flipping, not a new episode.
-        const sameEpisode = prev !== undefined && prev.stateChangeSeq === stateChangeSeq &&
-            (prev.status === status || (READY.has(prev.status) && READY.has(status)));
-        observed[name] = { status, stateChangeSeq, since: sameEpisode ? prev.since : now };
+    /** Wait for a gate or landing in progress (tests, shutdown). */
+    async settle() {
+        while (this.inflight)
+            await this.inflight;
     }
-    await writeAtomic(statePath, `${JSON.stringify(observed, null, 2)}\n`);
-    return observed;
-}
-async function deliverAlert(deps, room, alert) {
-    const record = (channel, error) => appendEvent(deps.env, room.name, () => ({ kind: "delivery", ref: alert.seq, ok: error === null, error, channel }), room);
-    const supervisor = Object.entries(room.members).find(([, m]) => m.role === "supervisor");
-    // A supervisor that is itself blocked or gone cannot take the prompt.
-    if (supervisor && supervisor[0] !== alert.member) {
-        let error = null;
-        try {
-            await handToAgent(deps, supervisor[1].paneId, `[SLP alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}]\n\n${alert.text}\n\n` +
-                "[SLP] A fact-based reminder, not a verdict. Review with `slp status` / `slp log` and report concerns to the human.");
+    startRequest(project, events) {
+        if (this.inflight)
+            return;
+        const next = pendingRequests(events)[0];
+        if (!next)
+            return;
+        this.deps.out(`working on ${next.request}: ${next.what} ${next.lane}`);
+        this.inflight = runRequest(this.deps, project, next)
+            .catch(async (error) => {
+            this.deps.out(`${next.request} failed: ${describe(error)}`);
+            await append(this.deps.env, project.id, () => ({
+                kind: "request-done", request: next.request, ok: false, detail: `slp error: ${describe(error)}`,
+            })).catch(() => undefined);
+            await this.tell(project, fold(events), "sup", `slp could not finish ${next.what} for ${next.lane}: ${describe(error)}`, next.lane);
+        })
+            .finally(() => { this.inflight = null; });
+    }
+    async tell(project, state, to, text, lane) {
+        const target = to && state.seats.get(to)?.live ? to : "human";
+        await sendLetter(this.deps, project.id, { letter: "NOTICE", from: "slp", to: target, lane, text })
+            .catch((error) => this.deps.out(`could not tell ${target}: ${describe(error)}`));
+    }
+    /** Seats whose pane is gone, or stuck on a prompt only the Human can answer. */
+    async checkPanes(project, state, status) {
+        for (const seat of liveSeats(state)) {
+            const s = status.get(seat.paneId);
+            if (s === undefined) {
+                const n = (this.missing.get(seat.name) ?? 0) + 1;
+                this.missing.set(seat.name, n);
+                if (n >= watchTiming.goneTicks) {
+                    this.missing.delete(seat.name);
+                    await append(this.deps.env, project.id, () => ({ kind: "seat-stop", name: seat.name, reason: "its pane is gone" }));
+                    await this.tell(project, state, superiorOf(state, seat), `${seat.name} (${seat.role}) is gone: its pane ${seat.paneId} no longer runs an agent.`, seat.lane);
+                }
+                continue;
+            }
+            this.missing.delete(seat.name);
+            if (s === "blocked") {
+                const since = this.blockedSince.get(seat.name) ?? this.now();
+                this.blockedSince.set(seat.name, since);
+                if (this.now() - since >= watchTiming.blockedMs && !this.blockedTold.has(seat.name)) {
+                    this.blockedTold.add(seat.name);
+                    await this.deps.herdr.notify(`slp: ${seat.name} waits on you`, `A prompt in pane ${seat.paneId} needs the Human.`).catch(() => undefined);
+                    const up = superiorOf(state, seat);
+                    if (up) {
+                        await this.tell(project, state, up, `${seat.name} has waited on a prompt in its pane for ${Math.round((this.now() - since) / 60_000)} min; the Human was notified.`, seat.lane);
+                    }
+                }
+            }
+            else {
+                this.blockedSince.delete(seat.name);
+                this.blockedTold.delete(seat.name);
+            }
         }
-        catch (e) {
-            error = describe(e);
-            deps.out(`  could not reach the supervisor: ${error}`);
+    }
+    /** Close Reviewer and Critic seats that have reported, once their turn ends. */
+    async retire(project, state, status) {
+        for (const seat of liveSeats(state)) {
+            if (!finished(state, seat))
+                continue;
+            const s = status.get(seat.paneId);
+            if (s === "working" || s === "blocked")
+                continue;
+            await closeSeat(this.deps, project.id, seat, "reported");
+            this.deps.out(`closed ${seat.name}: it has reported`);
         }
-        await record("prompt", error);
     }
-    let error = null;
-    try {
-        await deps.herdr.notify(`SLP ${room.name}: ${alert.rule}`, alert.text);
+    async remindAsks(project, state) {
+        for (const ask of state.asks.values()) {
+            if (ask.answer !== null || ask.to === "human")
+                continue;
+            if (!state.seats.get(ask.to)?.live || !state.seats.get(ask.from)?.live)
+                continue;
+            const reminders = state.letters.filter((l) => l.letter === "STILL_OPEN" && l.text.startsWith(`${ask.id} `));
+            if (reminders.length >= watchTiming.askReminders)
+                continue;
+            const last = Date.parse(reminders.at(-1)?.ts ?? ask.askedAt);
+            if (this.now() - last < watchTiming.askReminderMs)
+                continue;
+            await sendLetter(this.deps, project.id, { letter: "STILL_OPEN", from: "slp", to: ask.to,
+                text: `${ask.id} from ${ask.from} is unanswered after ${Math.round((this.now() - Date.parse(ask.askedAt)) / 60_000)} min: ${ask.text}` })
+                .catch((error) => this.deps.out(`could not remind ${ask.to}: ${describe(error)}`));
+        }
     }
-    catch (e) {
-        error = describe(e);
-        deps.out(`  notification failed: ${error}`);
-    }
-    await record("notification", error);
 }
-function toStatus(status) {
-    return status === "idle" || status === "done" || status === "working" || status === "blocked" ? status : "unknown";
-}
-async function loadState(path) {
-    try {
-        const parsed = StateSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
-        return parsed.success ? parsed.data : {};
-    }
-    catch {
-        return {};
-    }
+function finished(state, seat) {
+    if (seat.role === "reviewer")
+        return [...state.reviews.values()].some((r) => r.seat === seat.name && r.done);
+    if (seat.role === "critic")
+        return state.letters.some((l) => l.from === seat.name && l.letter === "CRITIQUE");
+    return false;
 }

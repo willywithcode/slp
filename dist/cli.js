@@ -1,57 +1,69 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { parseArgs } from "node:util";
-import * as cmd from "./commands.js";
+import { loadConfig, saveConfig } from "./core/config.js";
+import { GoneError, SlpError } from "./core/errors.js";
+import { append, readLedger, Role } from "./core/ledger.js";
+import { acquireLock, releaseLock } from "./core/lock.js";
+import { configPath } from "./core/paths.js";
+import { contextPath, loadProject } from "./core/project.js";
+import { guide } from "./guide.js";
 import { Herdr } from "./herdr.js";
-import { guide } from "./protocol.js";
-import { Role, resolveRoom, resolveSelf, RoomGoneError, roomDir, SplError } from "./room.js";
-import { acquireLock, releaseLock } from "./log.js";
-import { DEFAULT_WATCH } from "./watch.js";
-import { createEvaluator, JEV_MODEL } from "./jev.js";
-import { watchTick } from "./watcher.js";
-const USAGE = `slp — Supervisor/Lead/Peer rooms on Herdr
+import { calibrate } from "./jev/calibrate.js";
+import { projectHere, whoAmI } from "./identity.js";
+import { amendLane, openLane } from "./lanes.js";
+import { redeliver, watchLockPath } from "./letters.js";
+import { writeAtomic } from "./core/fsutil.js";
+import { mayRun, ROLE_SPECS } from "./roles.js";
+import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
+import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask } from "./tasks.js";
+import { closeLane, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
+import { Watcher } from "./watcher.js";
+const USAGE = `slp: a Supervisor, Leads and Peers working on your repository through Herdr
 
-Human:
-  slp up <room> [--lead KIND] [--peers KIND,KIND] [--supervisor KIND|none] [--cwd DIR] [--watch]
-  slp down <room> [--force]
-  slp status [--room R]
-  slp log <case> [--room R]
-  slp watch [--room R] [--once] [--interval SECONDS] [--jev off|shadow|alert]
+The Human (in a Herdr pane, inside the repository):
+  slp start                 open the Supervisor beside you and a watcher below
+  slp status                where the work stands
+  slp stop [--force]        close every seat
+  slp intro <seat>          resend a seat's introduction (after a trust dialog)
+  slp redeliver <seq> [--force]
+  slp watch [--project ID] [--once] [--interval SECONDS]
+  slp config                where the accounts and models are configured
+  slp incidents             what the watch found; mark one: slp ack <id> useful|noise|unknown
+  slp calibrate [--dry-run] set Jev's thresholds from those marks
 
-Agents (inside a room pane):
-  slp guide [lead|peer|supervisor]
-  slp whoami
-  slp send <peer> [TEXT | - | --file PATH]            (lead)
-  slp reply <case> <peer> [TEXT | - | --file PATH] [--close]  (lead)
-  slp handback <case> [TEXT | - | --file PATH]        (peer)
-  slp redeliver [--force] <seq>
-
-KIND is a herdr agent kind (claude, codex, opencode, ...). Default room:
-lead claude, peers codex,codex, supervisor claude. Data lives in ~/.slp
-(override with SLP_HOME).`;
-export async function main(argv, env, deps = { herdr: new Herdr(), out: (s) => console.log(s) }) {
-    const { values, positionals } = parseArgs({
-        args: argv,
-        allowPositionals: true,
-        options: {
-            room: { type: "string" },
-            file: { type: "string" },
-            cwd: { type: "string" },
-            lead: { type: "string" },
-            peers: { type: "string" },
-            supervisor: { type: "string" },
-            once: { type: "boolean" },
-            force: { type: "boolean" },
-            close: { type: "boolean" },
-            jev: { type: "string" },
-            watch: { type: "boolean" },
-            interval: { type: "string" },
-            help: { type: "boolean", short: "h" },
-        },
-    });
+Seats run \`slp guide\` for their own verbs. State lives in ~/.slp (SLP_HOME).`;
+const OPTIONS = {
+    title: { type: "string" }, outcome: { type: "string" }, accept: { type: "string", multiple: true },
+    out: { type: "string", multiple: true }, write: { type: "string", multiple: true }, human: { type: "string" },
+    isolate: { type: "boolean" }, why: { type: "string" }, land: { type: "boolean" }, drop: { type: "boolean" },
+    "over-gate": { type: "boolean" }, "over-risk": { type: "boolean" }, reason: { type: "string" }, base: { type: "string" }, gate: { type: "string" },
+    "no-gate": { type: "boolean" }, "gate-timeout": { type: "string" }, goal: { type: "string" },
+    own: { type: "string", multiple: true }, context: { type: "string" }, preset: { type: "string" },
+    parallel: { type: "boolean" }, task: { type: "string" }, lane: { type: "boolean" }, focus: { type: "string" },
+    check: { type: "string", multiple: true }, left: { type: "string" }, finding: { type: "string", multiple: true },
+    default: { type: "string" }, force: { type: "boolean" }, project: { type: "string" }, once: { type: "boolean" },
+    interval: { type: "string" }, file: { type: "string" }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
+};
+export class UsageError extends Error {
+}
+/** Commands only the Human runs, never a seat. */
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate"]);
+/** Seat verbs the Human may run too. */
+const HUMAN_TOO = new Set(["incidents", "ack"]);
+/** Verbs only a seat runs; everything else is the Human's. */
+const SEAT_VERBS = new Set([
+    "whoami", "context", "diff", "test", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
+    "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "done", "findings",
+]);
+export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
+    const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS });
     const [command, ...args] = positionals;
-    const d = { env, ...deps };
-    const room = values.room;
+    if (!command || values.help || command === "help") {
+        // A seat asking for help gets its own guide, not the Human's usage.
+        const me = await whoAmI(deps.env).catch(() => null);
+        deps.out(me ? guide(me.seat.role) : USAGE);
+        return command || values.help ? 0 : 2;
+    }
     const text = async (arg) => {
         if (values.file !== undefined) {
             if (arg !== undefined)
@@ -59,141 +71,323 @@ export async function main(argv, env, deps = { herdr: new Herdr(), out: (s) => c
             return decodeText(await readFile(values.file));
         }
         if (arg === "-")
-            return decodeText(await readStdin());
+            return decodeText(await stdin());
         if (arg === undefined)
-            throw new UsageError("Missing message text (TEXT, -, or --file PATH)");
+            throw new UsageError(`"${command}" needs text: TEXT, - (stdin) or --file PATH`);
         return arg;
     };
     const arity = (n, m = n) => {
         if (args.length < n || args.length > m)
             throw new UsageError(`Wrong number of arguments for "${command}"`);
     };
-    if (!command || values.help || command === "help") {
-        deps.out(USAGE);
-        return command || values.help ? 0 : 2;
+    if (SEAT_VERBS.has(command)) {
+        // The Human may also list and mark incidents, from any terminal.
+        const me = HUMAN_TOO.has(command) ? await whoAmI(deps.env).catch(() => null) : await whoAmI(deps.env);
+        if (!me)
+            return humanIncidents(deps, cwd, command, args, arity);
+        if (!mayRun(me.seat.role, command))
+            throw new SlpError(`The ${me.seat.role} does not run \`slp ${command}\`; see \`slp guide\`.`);
+        return seatVerb(command, args, values, { deps, project: me.project, state: me.state, seat: me.seat }, text, arity);
+    }
+    // The Human's own commands are not for seats: an agent could stop the whole team.
+    if (HUMAN_ONLY.has(command)) {
+        const me = await whoAmI(deps.env).catch(() => null);
+        if (me)
+            throw new SlpError(`\`slp ${command}\` is the Human's command; the ${me.seat.role} does not run it. See \`slp guide\`.`);
     }
     switch (command) {
-        case "up": {
-            arity(1);
-            await cmd.up(d, {
-                room: args[0],
-                cwd: values.cwd ?? process.cwd(),
-                lead: values.lead ?? "claude",
-                peers: (values.peers ?? "codex,codex").split(",").map((s) => s.trim()).filter(Boolean),
-                supervisor: values.supervisor === "none" ? null : values.supervisor ?? "claude",
-                watch: values.watch === true,
-            });
-            return 0;
-        }
-        case "send":
-            arity(1, 2);
-            await cmd.send(d, room, args[0], await text(args[1]));
-            return 0;
-        case "reply":
-            arity(2, 3);
-            await cmd.reply(d, room, args[0], args[1], await text(args[2]), values.close === true);
-            return 0;
-        case "handback":
-            arity(1, 2);
-            await cmd.handback(d, room, args[0], await text(args[1]));
-            return 0;
-        case "redeliver": {
-            arity(1);
-            const seq = Number(args[0]);
-            if (!Number.isInteger(seq) || seq < 1)
-                throw new UsageError("seq must be a positive integer");
-            await cmd.redeliver(d, room, seq, values.force === true);
-            return 0;
-        }
-        case "down":
-            arity(1);
-            await cmd.down(d, args[0], values.force === true);
-            return 0;
-        case "status":
-            arity(0);
-            await cmd.status(d, room);
-            return 0;
-        case "log":
-            arity(1);
-            await cmd.log(d, room, args[0]);
-            return 0;
-        case "watch": {
-            arity(0);
-            const target = await resolveRoom(env, room);
-            const interval = Number(values.interval ?? 10);
-            if (!Number.isFinite(interval) || interval < 1)
-                throw new UsageError("--interval must be at least 1 second");
-            const jev = jevOptions(values.jev ?? "off", env, deps.fetch);
-            // One watcher per room: two would double Jev spend and alert deliveries.
-            // A crashed watcher's lock is reclaimed because its pid is gone.
-            const lock = join(roomDir(env, target.name), "watch.lock");
-            const token = await acquireLock(lock, {
-                timeoutMs: 0,
-                reclaimForeign: false,
-                busy: (owner) => `Room ${target.name} is already watched by pid ${owner?.pid ?? "unknown"}${owner ? ` on ${owner.host}` : ""}`,
-            });
-            try {
-                if (values.once) {
-                    await watchTick(d, target, DEFAULT_WATCH, jev);
-                    return 0;
-                }
-                deps.out(`watching room ${target.name} every ${interval}s (Ctrl+C to stop)`);
-                for (;;) {
-                    try {
-                        await watchTick(d, target, DEFAULT_WATCH, jev);
-                    }
-                    catch (error) {
-                        if (error instanceof RoomGoneError) {
-                            deps.out(`watch: ${error.message}; stopping`);
-                            return 0;
-                        }
-                        // Keep watching: herdr may be restarting or briefly unavailable.
-                        deps.out(`watch: ${error instanceof Error ? error.message : String(error)}`);
-                    }
-                    await new Promise((r) => setTimeout(r, interval * 1000));
-                }
-            }
-            finally {
-                await releaseLock(lock, token).catch(() => undefined);
-            }
-        }
-        case "whoami": {
-            arity(0);
-            const self = await resolveSelf(env, room);
-            deps.out(`${self.name} (${self.member.role}) in room ${self.room.name}`);
-            return 0;
-        }
         case "guide": {
             arity(0, 1);
-            const role = args[0] !== undefined ? Role.safeParse(args[0]) : null;
-            if (role && !role.success)
-                throw new UsageError("Role must be lead, peer or supervisor");
-            deps.out(guide(role?.data ?? (await resolveSelf(env, room)).member.role));
+            if (args[0] !== undefined) {
+                const role = Role.safeParse(args[0]);
+                if (!role.success)
+                    throw new UsageError(`Role must be one of ${Role.options.join(", ")}`);
+                deps.out(guide(role.data));
+                return 0;
+            }
+            const me = await whoAmI(deps.env).catch(() => null);
+            deps.out(me ? guide(me.seat.role) : USAGE);
             return 0;
+        }
+        case "status": {
+            arity(0);
+            const me = await whoAmI(deps.env).catch(() => null);
+            const { project, state } = me ?? await projectHere(deps.env, cwd);
+            deps.out(render(project, state, deps.now?.() ?? Date.now(), contextPath(deps.env, project.id)));
+            return 0;
+        }
+        case "start":
+            arity(0);
+            await start(deps, cwd, await loadConfig(deps.env));
+            return 0;
+        case "stop": {
+            arity(0);
+            const { project, state } = await projectHere(deps.env, cwd);
+            await stop(deps, project, state, values.force === true);
+            return 0;
+        }
+        case "intro": {
+            arity(1);
+            const { project, state } = await projectHere(deps.env, cwd);
+            await resendIntro(deps, project, state, args[0]);
+            return 0;
+        }
+        case "redeliver": {
+            arity(1);
+            const seq = positiveInt(args[0], "seq");
+            const me = await whoAmI(deps.env).catch(() => null);
+            const project = me?.project ?? (await projectHere(deps.env, cwd)).project;
+            await redeliver(deps, project.id, me ? me.seat.name : null, seq, values.force === true);
+            return 0;
+        }
+        case "config":
+            arity(0);
+            await loadConfig(deps.env);
+            deps.out(configPath(deps.env));
+            return 0;
+        case "calibrate": {
+            arity(0);
+            const { project } = await projectHere(deps.env, cwd);
+            const config = await loadConfig(deps.env);
+            const results = calibrate(await readLedger(deps.env, project.id), config.watch.budgetPerDay);
+            if (!results.length) {
+                deps.out("No Jev readings have been marked yet. Mark incidents with `slp ack <id> useful|noise`, then calibrate again.");
+                return 0;
+            }
+            const thresholds = { ...config.jev.thresholds };
+            for (const r of results) {
+                deps.out(`${r.key.padEnd(36)} useful ${String(r.useful).padStart(3)} noise ${String(r.noise).padStart(3)} ` +
+                    `separation ${r.separation === null ? "  -  " : r.separation.toFixed(2)}  ${r.threshold !== null ? `threshold ${r.threshold.toFixed(2)}` : r.reason}`);
+                if (r.threshold !== null)
+                    thresholds[r.key] = r.threshold;
+                else
+                    delete thresholds[r.key];
+            }
+            if (values["dry-run"])
+                return 0;
+            await saveConfig(deps.env, { ...config, jev: { ...config.jev, thresholds } });
+            deps.out(`thresholds saved to ${configPath(deps.env)}` +
+                (config.jev.mode === "on" ? "" : `; Jev is in ${config.jev.mode} mode, so they act only once "jev.mode" is "on"`));
+            return 0;
+        }
+        case "watch": {
+            arity(0);
+            const id = values.project ?? deps.env.SLP_PROJECT ?? (await projectHere(deps.env, cwd)).project.id;
+            if (!(await loadProject(deps.env, id)))
+                throw new SlpError(`No slp project ${id}`);
+            const interval = values.interval === undefined ? 5 : Number(values.interval);
+            if (!Number.isFinite(interval) || interval < 1)
+                throw new UsageError("--interval must be at least 1 second");
+            return watch(deps, id, interval, values.once === true);
         }
         default:
             throw new UsageError(`Unknown command "${command}"`);
     }
 }
-class UsageError extends Error {
+async function seatVerb(command, args, v, a, text, arity) {
+    const { deps } = a;
+    const list = (x) => (x ?? []).map((s) => s.trim()).filter(Boolean);
+    switch (command) {
+        case "context": {
+            arity(0, 1);
+            const path = contextPath(deps.env, a.project.id);
+            if (args[0] === undefined && v.file === undefined) {
+                deps.out(await readFile(path, "utf8").catch(() => "(no concept written yet)"));
+                return 0;
+            }
+            if (!ROLE_SPECS[a.seat.role].editsContext)
+                throw new SlpError("Only the Supervisor writes the concept; ask it with `slp ask`.");
+            const body = await text(args[0]);
+            if (!body.trim())
+                throw new SlpError("Refusing to write an empty concept.");
+            const lines = body.trimEnd().split(/\r?\n/);
+            await writeAtomic(path, `${lines.join("\n")}\n`);
+            deps.out(`concept written (${lines.length} lines)`);
+            return 0;
+        }
+        case "diff":
+            arity(1);
+            deps.out(await diffOf(a, args[0]));
+            return 0;
+        case "test":
+            arity(0, 1);
+            deps.out(await testOf(a, args[0] ?? null));
+            return 0;
+        case "whoami":
+            arity(0);
+            deps.out(`${a.seat.name}: ${a.seat.role}${a.seat.lane ? ` in lane ${a.seat.lane}` : ""}${a.seat.task ? `, task ${a.seat.task}` : ""}` +
+                ` · project ${a.project.id} (${a.project.root})`);
+            return 0;
+        case "message":
+            arity(1, 2);
+            await message(a, args[0], await text(args[1]));
+            return 0;
+        case "open-lane":
+            arity(0);
+            await openLane(deps, a.project, await loadConfig(deps.env), {
+                title: v.title ?? "", outcome: v.outcome ?? "", acceptance: list(v.accept), outOfScope: list(v.out),
+                writeSet: list(v.write), humanWords: v.human ?? "", isolate: v.isolate === true,
+            });
+            return 0;
+        case "amend-lane":
+            arity(1);
+            await amendLane(deps, a.project, args[0], {
+                why: v.why ?? "", ...(v.outcome !== undefined ? { outcome: v.outcome } : {}),
+                ...(v.accept ? { acceptance: list(v.accept) } : {}), ...(v.out ? { outOfScope: list(v.out) } : {}),
+                ...(v.write ? { writeSet: list(v.write) } : {}),
+            });
+            return 0;
+        case "close-lane":
+            arity(1);
+            await closeLane(a, args[0], { land: v.land === true, drop: v.drop === true, overGate: v["over-gate"] === true, overRisk: v["over-risk"] === true, reason: v.reason ?? "" });
+            return 0;
+        case "set-project":
+            arity(0);
+            await setProject(a, { base: v.base, gate: v.gate, noGate: v["no-gate"] === true, timeout: v["gate-timeout"] });
+            return 0;
+        case "answer":
+            arity(1, 2);
+            await answer(a, args[0], await text(args[1]));
+            return 0;
+        case "incidents": {
+            arity(0);
+            const acked = new Set(a.state.acks.map((k) => k.incident));
+            const open = a.state.incidents.filter((i) => !acked.has(i.incident) && (i.to === a.seat.name || a.seat.role === "supervisor"));
+            deps.out(open.length ? open.map((i) => `${i.incident} [${i.level}] ${i.seat}: ${i.text}`).join("\n") : "No open incidents.");
+            return 0;
+        }
+        case "ack": {
+            arity(2, 3);
+            const verdict = args[1];
+            if (verdict !== "useful" && verdict !== "noise" && verdict !== "unknown")
+                throw new UsageError("Verdict is useful, noise or unknown");
+            if (!a.state.incidents.some((i) => i.incident === args[0]))
+                throw new SlpError(`No incident ${args[0]}`);
+            await append(deps.env, a.project.id, () => ({ kind: "ack", incident: args[0], by: a.seat.name, verdict, note: args[2] ?? "" }));
+            return 0;
+        }
+        case "move-seat":
+            arity(2);
+            await moveSeatVerb(a, await loadConfig(deps.env), args[0], args[1]);
+            return 0;
+        case "start-task":
+            arity(0);
+            await startTask(a, await loadConfig(deps.env), {
+                title: v.title ?? "", goal: v.goal ?? "", acceptance: list(v.accept), owned: list(v.own), outOfScope: list(v.out),
+                context: v.context ?? "", preset: v.preset ?? null, parallel: v.parallel === true,
+            });
+            return 0;
+        case "start-review":
+            arity(0);
+            await startReview(a, await loadConfig(deps.env), { task: v.task ?? null, lane: v.lane === true }, v.focus ?? "");
+            return 0;
+        case "accept":
+            arity(1, 2);
+            await acceptTask(a, args[0], args[1] ?? "");
+            return 0;
+        case "rework":
+            arity(1, 2);
+            await reworkTask(a, args[0], await text(args[1]));
+            return 0;
+        case "cut":
+            arity(1, 2);
+            await cutTask(a, args[0], await text(args[1]));
+            return 0;
+        case "report": {
+            arity(1, 2);
+            const type = args[0];
+            if (type !== "ready" && type !== "progress" && type !== "blocked")
+                throw new UsageError("report ready|progress|blocked TEXT");
+            await report(a, type, await text(args[1]));
+            return 0;
+        }
+        case "ask": {
+            arity(1, 2);
+            const type = args[0];
+            if (type !== "need" && type !== "blocked" && type !== "question")
+                throw new UsageError("ask need|blocked|question TEXT [--default \"...\"]");
+            await ask(a, type, await text(args[1]), v.default ?? "");
+            return 0;
+        }
+        case "done": {
+            arity(1, 2);
+            const outcome = args[0];
+            if (outcome !== "complete" && outcome !== "partial" && outcome !== "blocked")
+                throw new UsageError("done complete|partial|blocked TEXT");
+            const summary = await text(args[1]);
+            if (a.seat.role === "reviewer")
+                await finishReview(a, summary, list(v.finding).map(parseFinding));
+            else
+                await handBack(a, { outcome, summary, checks: list(v.check), left: v.left ?? "" });
+            return 0;
+        }
+        case "findings":
+            arity(0);
+            await findings(a, list(v.finding).map(parseCritique));
+            return 0;
+        default:
+            throw new UsageError(`Unknown command "${command}"`);
+    }
 }
-/** Jev is off unless asked for (ADR 0005); when on, its config must be valid. */
-function jevOptions(mode, env, http = fetch) {
-    if (mode !== "off" && mode !== "shadow" && mode !== "alert")
-        throw new UsageError("--jev must be off, shadow or alert");
-    const disabled = { mode: "off", evaluate: async () => null, threshold: 1 };
-    if (mode === "off")
-        return disabled;
-    const apiKey = env.JEV_API_KEY?.trim();
-    if (!apiKey)
-        throw new SplError(`--jev ${mode} needs JEV_API_KEY in the environment`);
-    const model = env.JEV_MODEL?.trim() || "jev-1.13.0";
-    if (!JEV_MODEL.test(model))
-        throw new SplError("JEV_MODEL must be a pinned version such as jev-1.13.0, not an alias");
-    const threshold = Number(env.SLP_ALERT_CONFIDENCE ?? 0.9);
-    if (!(threshold >= 0.5 && threshold <= 1))
-        throw new SplError("SLP_ALERT_CONFIDENCE must be a number from 0.5 to 1");
-    return { mode, evaluate: createEvaluator({ apiKey, model }, http), threshold };
+/** The Human's view of incidents, and marks (`by: human`). */
+async function humanIncidents(deps, cwd, command, args, arity) {
+    const { project, state } = await projectHere(deps.env, cwd);
+    const acked = new Set(state.acks.map((k) => k.incident));
+    if (command === "incidents") {
+        arity(0);
+        const open = state.incidents.filter((i) => !acked.has(i.incident));
+        deps.out(open.length ? open.map((i) => `${i.incident} [${i.level}] ${i.seat} → ${i.to ?? "you"}: ${i.text}`).join("\n") : "No unmarked incidents.");
+        return 0;
+    }
+    arity(2, 3);
+    const verdict = args[1];
+    if (verdict !== "useful" && verdict !== "noise" && verdict !== "unknown")
+        throw new UsageError("Verdict is useful, noise or unknown");
+    if (!state.incidents.some((i) => i.incident === args[0]))
+        throw new SlpError(`No incident ${args[0]}`);
+    await append(deps.env, project.id, () => ({ kind: "ack", incident: args[0], by: "human", verdict, note: args[2] ?? "" }));
+    return 0;
+}
+async function watch(deps, id, interval, once) {
+    // One watcher per project: two would deliver letters and land lanes twice.
+    const lock = watchLockPath(deps.env, id);
+    const token = await acquireLock(lock, {
+        timeoutMs: 0, reclaimForeign: false,
+        busy: (owner) => `Project ${id} is already watched by pid ${owner?.pid ?? "unknown"}${owner ? ` on ${owner.host}` : ""}`,
+    });
+    const watcher = new Watcher(deps, id);
+    try {
+        if (!once)
+            deps.out(`slp watching ${id} every ${interval}s (Ctrl+C to stop)`);
+        for (;;) {
+            try {
+                await watcher.tick();
+            }
+            catch (error) {
+                if (error instanceof GoneError) {
+                    deps.out(`watch: ${error.message}; stopping`);
+                    return 0;
+                }
+                // Herdr may be restarting; keep watching.
+                deps.out(`watch: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            if (once) {
+                await watcher.settle();
+                return 0;
+            }
+            await new Promise((resolve) => setTimeout(resolve, interval * 1000));
+        }
+    }
+    finally {
+        await watcher.settle().catch(() => undefined);
+        await releaseLock(lock, token).catch(() => undefined);
+    }
+}
+function positiveInt(raw, name) {
+    const n = Number(raw.replace(/^#/, ""));
+    if (!Number.isInteger(n) || n < 1)
+        throw new UsageError(`${name} must be a positive integer`);
+    return n;
 }
 async function readStdin() {
     const chunks = [];
@@ -201,27 +395,27 @@ async function readStdin() {
         chunks.push(chunk);
     return Buffer.concat(chunks);
 }
-/**
- * UTF-8 (with or without BOM) or BOM-marked UTF-16, which Windows PowerShell
- * 5.1 writes with `>` and Out-File.
- */
+const BOM = String.fromCharCode(0xfeff);
+/** UTF-8 (with or without BOM) or BOM-marked UTF-16, which Windows PowerShell 5.1 writes. */
 export function decodeText(bytes) {
     if (bytes[0] === 0xff && bytes[1] === 0xfe)
         return bytes.subarray(2).toString("utf16le");
     if (bytes[0] === 0xfe && bytes[1] === 0xff)
         return Buffer.from(bytes.subarray(2)).swap16().toString("utf16le");
-    return bytes.toString("utf8").replace(/^\uFEFF/, "");
+    const s = bytes.toString("utf8");
+    return s.startsWith(BOM) ? s.slice(1) : s;
 }
 export async function run(argv, env) {
+    const deps = { env, herdr: new Herdr(), out: (line) => console.log(line) };
     try {
-        return await main(argv, env);
+        return await main(argv, deps);
     }
     catch (error) {
         if (error instanceof UsageError || error.code?.startsWith("ERR_PARSE_ARGS")) {
-            console.error(`slp: ${error.message}\nRun \`slp help\` for usage.`);
+            console.error(`slp: ${error.message}\nRun \`slp help\` or \`slp guide\`.`);
             return 2;
         }
-        console.error(`slp: ${error instanceof SplError ? error.message : error instanceof Error ? error.message : String(error)}`);
+        console.error(`slp: ${error instanceof Error ? error.message : String(error)}`);
         return 1;
     }
 }

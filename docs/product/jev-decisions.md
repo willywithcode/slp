@@ -44,6 +44,21 @@ Types: **noul** yes/no; **choice** one of the labels; **score** ordered scale.
 | 19 | Critic | `critic_prefilter` per acceptance item vs the Human's words | choice: missing, added, contradiction, ambiguity, none | Context for the Critic | The Critic seat alone |
 | 20 | Lane closed | `failure_mode` of each incident and rework | choice over a fixed failure list | Retrospective metrics | No metrics |
 
+## Wired in v0.3
+
+| Items | Where | Status |
+| --- | --- | --- |
+| 9, 18 | Worker turn ends (the watcher sees working → idle) | Fallback: nudge after 3 min, then the Lead; Jev: sensor notes, immediate nudge when calibrated |
+| 2, 14 | New asks | Fallback: standard chain; Jev: a NOTICE to the recipient when calibrated |
+| 10, 11, 12 | Hand-backs | Fallback: required checks, the `unverified` fact, a review hint over 300 changed lines; Jev: notes to the Lead, incident when calibrated |
+| 7, 8 | Task briefs | Fallback: `brief_prescribes` ledger shape; Jev: notes to the Lead |
+| 4, 6 | Lanes | Fallback: required fields, catch-all refusal, keyword risk with a review-before-landing hold; Jev: notes to the Supervisor |
+| 16 | Landing | Fallback: migrations and destructive SQL hold; Jev: hold when calibrated |
+| 17 | Unrecognised API errors | Fallback: known limit and login patterns; Jev: account incident when calibrated |
+| 19 | Critic | Recorded only (no calibration path yet); the Critic works alone |
+| 20 | Lane closed | Recorded only (retrospective) |
+| 1, 3, 5, 13, 15 | Supervisor's conversation, reviews, pre-landing acceptance | Not wired: no slp event; the fallbacks (the Supervisor's judgement, reviewers' severities sorted, the gate and the Lead's report) stand |
+
 ## Priority
 
 1. `turn_end_state` (9): the largest saving of Lead and Supervisor turns.

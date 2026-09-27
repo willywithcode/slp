@@ -7,4 +7,5 @@ current independent audience. Ordinary work should rely on code, tests,
 decisions, pull requests, and Git history instead of accumulating permanent
 task narratives.
 
-No plan is currently retained here.
+- [spl-v0.2.md](spl-v0.2.md): rooms (superseded by v0.3).
+- [slp-v0.3.md](slp-v0.3.md): the Supervisor/Lead/Peer team; open items for the owner under Result.
