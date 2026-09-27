@@ -39,7 +39,10 @@ To work on spl itself: clone, `npm install`, `npm test`, `npm run build`
 
 ## Use
 
-From a terminal inside Herdr, in the project directory:
+The full workflow, when to use spl at all, what you do while a room runs,
+an alert runbook and troubleshooting are in
+[docs/product/workflow.md](docs/product/workflow.md). In short, from a
+terminal inside Herdr, in the project directory:
 
 ```sh
 spl up feature-x --lead claude --peers codex,codex --supervisor claude --watch

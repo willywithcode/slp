@@ -12,6 +12,8 @@ files after actual product domains, such as `overview.md`, `billing.md`,
 
 - [overview.md](overview.md): roles, communication and supervision contract,
   platforms.
+- [workflow.md](workflow.md): working with and without spl, step by step,
+  with alert runbook, example and troubleshooting.
 
 ## Update Rule
 
