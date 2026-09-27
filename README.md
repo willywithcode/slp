@@ -59,9 +59,12 @@ Supervisor in its pane. Each lane opens in its own tab; watch it there or with
 
 What only you do:
 
-- Answer startup dialogs (folder trust) and permission prompts in any pane.
-  slp never answers them, never types into a pane that shows one, and tells
-  you when one is waiting.
+- Answer startup dialogs (folder trust) in any pane. slp never answers them
+  and never types into a pane that shows one.
+- Permission prompts: by default you are out of the loop, as in seatworks,
+  and the Supervisor answers them for you (`slp permit`, each answer
+  recorded). Set `"human": { "inLoop": true }` in the config to answer them
+  yourself; slp then notifies you with the command.
 - Decide what the project does. The Supervisor asks you when it matters and
   keeps your answers in the concept (`~/.slp/projects/<id>/CONTEXT.md`).
 - Agree, or not, when slp holds a landing for you (a high-risk lane without a
@@ -102,6 +105,16 @@ One-time setup per account: open each agent once in the repository and
 answer its folder-trust dialog; on Windows, open each Codex account once so it
 can set up its sandbox (a Codex seat whose sandbox is not set up asks you to
 approve every command).
+
+## Permissions
+
+As in seatworks (ADR 0016): each role has what it must never do refused
+outright (no push, pull, checkout or forced branch moves; no other agents'
+logins, `~/.secrets` or git config; readers write and commit nothing), by
+Claude Code settings per role and a `git` shim on every seat's PATH. Codex
+seats never ask inside their sandbox. Claude seats run without asking inside
+Claude Code's sandbox on macOS and Linux; on Windows, where it does not exist
+yet, they ask, with read-only git and test commands allowed.
 
 ## Jev (optional)
 
