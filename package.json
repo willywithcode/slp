@@ -1,6 +1,6 @@
 {
   "name": "slp",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "A Supervisor, Leads and Peers working on your repository as coding agents on Herdr",
   "license": "Apache-2.0",
