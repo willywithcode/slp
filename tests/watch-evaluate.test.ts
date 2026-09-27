@@ -187,3 +187,14 @@ describe("closed cases", () => {
     expect(alerts.map((a) => a.rule)).toEqual(["lead-no-disposition"]);
   });
 });
+
+describe("queued messages", () => {
+  it("points at the watcher when a queued message stays undelivered", () => {
+    const events: SplEvent[] = [
+      ...log([["brief", "c1", "lead", "p1", 0]], [1]),
+      { kind: "delivery", seq: 2, ts: at(1000), ref: 1, ok: false, error: "cannot reach Herdr", stage: "queued" },
+    ];
+    const [alert] = run(events, { ...allIdle(), p1: obs("working", 0) }, 4 * MIN);
+    expect(alert!.text).toMatch(/queued.*spl watch/);
+  });
+});

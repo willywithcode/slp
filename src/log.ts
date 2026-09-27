@@ -18,6 +18,10 @@ export const EventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("delivery"), ...base, ref: z.number().int().positive(), ok: z.boolean(), error: z.string().nullable(),
     // Alerts only: which channel this attempt used.
     channel: z.enum(["prompt", "notification"]).optional(),
+    // Messages only. "queued": the sender could not reach Herdr (e.g. an agent
+    // sandbox) and left it for the room watcher; "relaying": the watcher
+    // claimed it and is delivering it now.
+    stage: z.enum(["queued", "relaying"]).optional(),
   }),
   // Raised by `spl watch`. `key` identifies the trigger so it fires once.
   z.object({
@@ -134,7 +138,7 @@ export interface Owner { token: string; pid: number; host: string; at: number }
  */
 export async function acquireLock(
   lock: string,
-  opts: { timeoutMs?: number; busy?: (owner: Owner | null) => string } = {},
+  opts: { timeoutMs?: number; busy?: (owner: Owner | null) => string; reclaimForeign?: boolean } = {},
 ): Promise<string> {
   const deadline = Date.now() + (opts.timeoutMs ?? lockTiming.timeoutMs);
   for (;;) {
@@ -142,7 +146,7 @@ export async function acquireLock(
     if (token) return token;
     // Retry at once only if the stale lock was actually removed; otherwise
     // wait like any other contender, bounded by the deadline.
-    if (await isStale(lock) && await reclaim(lock)) continue;
+    if (await isStale(lock, opts.reclaimForeign) && await reclaim(lock, opts.reclaimForeign)) continue;
     if (Date.now() >= deadline) {
       const owner = await readOwner(lock);
       throw new SplError(opts.busy?.(owner) ??
@@ -208,21 +212,30 @@ async function takeGuard(guard: string, waitMs: number): Promise<{ token: string
   }
 }
 
-async function isStale(lock: string): Promise<boolean> {
+/**
+ * `reclaimForeign` false: a lock owned by another host is never stale, since
+ * its owner's liveness cannot be checked (long-held locks such as a watcher's).
+ */
+async function isStale(lock: string, reclaimForeign = true): Promise<boolean> {
   const owner = await readOwner(lock);
   if (!owner) return (await ageOf(lock)) > lockTiming.ownerlessStaleMs;
-  if (owner.host !== hostname()) return Date.now() - owner.at > lockTiming.foreignStaleMs;
+  if (owner.host !== hostname()) return reclaimForeign && Date.now() - owner.at > lockTiming.foreignStaleMs;
   return !isAlive(owner.pid);
 }
 
+/** Whether a lock exists and its owner is alive (by the same rule as takeovers). */
+export async function lockHeldByLiveProcess(lock: string): Promise<boolean> {
+  return (await readOwner(lock)) !== null && !(await isStale(lock, false));
+}
+
 /** Remove a stale lock under the guard. Returns whether it was removed. */
-async function reclaim(lock: string): Promise<boolean> {
+async function reclaim(lock: string, reclaimForeign = true): Promise<boolean> {
   const guard = await takeGuard(`${lock}.reclaim`, 0);
   if (guard === "busy") return false; // someone else is reclaiming or releasing
   if (guard === "gone") throw Object.assign(new Error(`${lock} no longer exists`), { code: "ENOENT" });
   try {
     // Re-check under the guard: another reclaimer may already have replaced it.
-    if (!(await isStale(lock))) return false;
+    if (!(await isStale(lock, reclaimForeign))) return false;
     await rm(lock, { recursive: true, force: true });
     return true;
   } finally {

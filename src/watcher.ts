@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { foldCases, type CaseView } from "./cases.js";
-import { describe, type Deps } from "./commands.js";
+import { describe, handToAgent, relay, type Deps } from "./commands.js";
 import { decision, type Evaluate, type Evidence } from "./jev.js";
 import { appendEvent, readEvents, type SplEvent } from "./log.js";
 import { loadRoom, RoomGoneError, roomDir, writeAtomic, type Room } from "./room.js";
@@ -37,6 +37,10 @@ export async function watchTick(deps: Deps, room: Room, config: WatchConfig, jev
   if (!current) throw new RoomGoneError(`Room "${room.name}" does not exist (it may have been archived by \`spl down\`)`);
   if (current.workspaceId !== room.workspaceId || current.createdAt !== room.createdAt) {
     throw new RoomGoneError(`Room "${room.name}" was replaced by a newer room with the same name`);
+  }
+  // Deliver messages that senders inside agent sandboxes could only queue.
+  for (const view of foldCases(await readEvents(deps.env, room.name)).values()) {
+    for (const seq of view.queued) await relay(deps, room, view.messages.find((m) => m.seq === seq)!);
   }
   const now = deps.now?.() ?? Date.now();
   const observed = await observe(deps, room, now);
@@ -185,7 +189,7 @@ async function deliverAlert(deps: Deps, room: Room, alert: AlertEvent): Promise<
   if (supervisor && supervisor[0] !== alert.member) {
     let error: string | null = null;
     try {
-      await deps.herdr.prompt(supervisor[1].paneId,
+      await handToAgent(deps, supervisor[1].paneId,
         `[SPL alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}]\n\n${alert.text}\n\n` +
         "[SPL] A fact-based reminder, not a verdict. Review with `spl status` / `spl log` and report concerns to the human.");
     } catch (e) {

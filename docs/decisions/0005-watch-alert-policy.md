@@ -35,7 +35,8 @@ runs. The owner chose them on 2026-09-26.
   rounds) until the Supervisor prompt or the notification succeeds.
 - A member whose pane hosts a different agent kind counts as gone; an agent
   without a reported kind is `unknown` (never attributed to the member).
-- One watcher per room, enforced by an owned `watch.lock`. Pending alerts are
+- One watcher per room, enforced by an owned `watch.lock`; a watcher on
+  another host is never displaced by age (its liveness cannot be checked). Pending alerts are
   delivered before any Jev request, and a pass makes at most 3 Jev requests.
 - A watcher is bound to one room instance (workspace ID and creation time):
   it stops when that room is archived by `spl down` or replaced by a new room

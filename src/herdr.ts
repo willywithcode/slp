@@ -22,6 +22,11 @@ export class Herdr {
   ) {}
 
   private async call(args: readonly string[]): Promise<Record<string, any>> {
+    return parse(await this.run(args))?.result ?? {};
+  }
+
+  /** Run a command and return its stdout; errors are herdr's JSON on stderr. */
+  private async run(args: readonly string[]): Promise<string> {
     const { code, stdout, stderr } = await this.exec(this.bin, args);
     if (code !== 0) {
       const body = parse(stderr) ?? parse(stdout);
@@ -29,7 +34,7 @@ export class Herdr {
       if (error && typeof error.code === "string") throw new HerdrError(error.code, String(error.message ?? error.code));
       throw new HerdrError("cli_failed", (stderr || stdout).trim() || `herdr exited with ${code}`);
     }
-    return parse(stdout)?.result ?? {};
+    return stdout;
   }
 
   async workspaceCreate(opts: { cwd: string; label: string; env: Record<string, string> }): Promise<{ workspaceId: string; rootPaneId: string }> {
@@ -40,6 +45,10 @@ export class Herdr {
   async paneSplit(paneId: string, opts: { direction: "right" | "down"; cwd: string; env: Record<string, string> }): Promise<string> {
     const r = await this.call(["pane", "split", paneId, "--direction", opts.direction, "--cwd", opts.cwd, ...envArgs(opts.env), "--no-focus"]);
     return required(r.pane?.pane_id, "pane.pane_id");
+  }
+
+  async paneClose(paneId: string): Promise<void> {
+    await this.call(["pane", "close", paneId]);
   }
 
   async workspaceClose(workspaceId: string): Promise<void> {
@@ -72,6 +81,20 @@ export class Herdr {
 
   async notify(title: string, body: string): Promise<void> {
     await this.call(["notification", "show", title, "--body", body, "--sound", "request"]);
+  }
+
+  async agentStatus(target: string): Promise<string | null> {
+    const r = await this.call(["agent", "get", target]);
+    return typeof r.agent?.agent_status === "string" ? r.agent.agent_status : null;
+  }
+
+  async sendKeys(target: string, keys: readonly string[]): Promise<void> {
+    await this.call(["agent", "send-keys", target, ...keys]);
+  }
+
+  /** The agent's visible screen. The CLI prints plain text, not JSON. */
+  async agentRead(target: string): Promise<string> {
+    return this.run(["agent", "read", target, "--source", "visible"]);
   }
 
   /** Submit text to an agent without waiting for it to finish its turn. */

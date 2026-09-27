@@ -7,20 +7,19 @@ const STATE = {
 export function foldCases(events) {
     const cases = new Map();
     const delivered = new Set();
-    const errors = new Map();
+    const last = new Map();
     for (const e of events) {
         if (e.kind !== "delivery")
             continue;
         if (e.ok)
             delivered.add(e.ref);
-        else
-            errors.set(e.ref, e.error ?? "unknown error");
+        last.set(e.ref, e);
     }
     for (const e of events) {
         if (e.kind === "delivery" || e.kind === "alert" || e.kind === "assessment")
             continue;
         if (e.kind === "brief") {
-            cases.set(e.case, { id: e.case, lead: e.from, peer: e.to, state: STATE.brief, messages: [], undelivered: [], failed: [], unconfirmed: [], errors: {} });
+            cases.set(e.case, { id: e.case, lead: e.from, peer: e.to, state: STATE.brief, messages: [], undelivered: [], failed: [], unconfirmed: [], queued: [], errors: {} });
         }
         const view = cases.get(e.case);
         if (!view)
@@ -29,16 +28,22 @@ export function foldCases(events) {
         view.state = e.kind === "reply" && e.closes ? "closed" : STATE[e.kind];
         if (e.kind !== "handback")
             view.peer = e.to;
+        const attempt = last.get(e.seq);
+        // A resend queued after an earlier delivery still waits for the watcher.
+        if (attempt?.stage === "queued")
+            view.queued.push(e.seq);
         if (delivered.has(e.seq))
             continue;
         view.undelivered.push(e.seq);
-        const error = errors.get(e.seq);
-        if (error === undefined) {
+        if (attempt?.stage === "queued") {
+            // counted above
+        }
+        else if (!attempt || attempt.stage === "relaying") {
             view.unconfirmed.push(e.seq);
         }
         else {
             view.failed.push(e.seq);
-            view.errors[e.seq] = error;
+            view.errors[e.seq] = attempt.error ?? "unknown error";
         }
     }
     return cases;

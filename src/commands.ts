@@ -2,7 +2,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { foldCases } from "./cases.js";
 import { Herdr, HerdrError } from "./herdr.js";
-import { acquireLock, appendEvent, isMessage, nextCaseId, readEvents, type MessageEvent } from "./log.js";
+import { acquireLock, appendEvent, isMessage, lockHeldByLiveProcess, nextCaseId, readEvents, type MessageEvent } from "./log.js";
 import { envelope, onboarding } from "./protocol.js";
 import {
   loadRoom, MEMBER_NAME, resolveRoom, resolveSelf, RoomGoneError, roomDir, saveRoom, splHome, SplError,
@@ -23,11 +23,18 @@ export const INLINE_LIMIT = 6_000;
  * everything else keeps the agent's normal permission behaviour.
  */
 export function agentArgs(kind: string, env: Env): string[] {
-  if (kind === "claude") return ["--allowedTools", "Bash(spl *)"];
-  // Codex's sandbox must be able to write the room log.
-  if (kind === "codex") return ["--add-dir", splHome(env)];
+  // spl.cmd too: on Windows an agent may call the .cmd shim explicitly.
+  if (kind === "claude") return ["--allowedTools", "Bash(spl *)", "Bash(spl.cmd *)"];
+  // Codex: its own process, not the shared background server, so commands
+  // see this pane's HERDR_PANE_ID; workspace-write (Codex's normal mode for
+  // trusted projects) so the Peer can edit code and --add-dir is honoured for
+  // the room log. A read-only default makes Codex exit on --add-dir.
+  if (kind === "codex") return ["--no-daemon", "--sandbox", "workspace-write", "--add-dir", splHome(env)];
   return [];
 }
+
+/** Startup screens that only the human may answer (Claude Code, Codex). */
+const STARTUP_DIALOG = /trust this folder|do you trust|one you trust|trust the files|trust and continue/i;
 
 export interface UpOptions { room: string; cwd: string; lead: string; peers: string[]; supervisor: string | null; watch?: boolean }
 
@@ -86,9 +93,14 @@ async function createRoom(deps: Deps, o: UpOptions, created: (workspaceId: strin
   const roster = plan.map((m) => `${m.name} (${m.role}, ${m.kind})`).join(", ");
   for (const m of plan) {
     const member = room.members[m.name]!;
-    const intro = onboarding(o.room, m.name, m.role, roster);
+    const intro = onboarding(o.room, m.name, m.role, roster, process.platform, m.kind);
     try {
-      await deps.herdr.agentStart(member.herdrName, m.kind, member.paneId, 60_000, agentArgs(m.kind, deps.env));
+      await startInFreePane(deps, room, m.name, cwd, paneEnv);
+      // Herdr can report an agent ready while a folder-trust dialog is shown;
+      // the prompt's Enter would then accept it on the human's behalf.
+      if (STARTUP_DIALOG.test(await deps.herdr.agentRead(member.herdrName))) {
+        throw new SplError("a folder-trust dialog is waiting for the human");
+      }
       await deps.herdr.prompt(member.herdrName, intro);
       deps.out(`${m.name}: ${m.kind} started as ${member.herdrName} in ${member.paneId}`);
     } catch (error) {
@@ -110,6 +122,44 @@ async function createRoom(deps: Deps, o: UpOptions, created: (workspaceId: strin
     }
   }
   return room;
+}
+
+/** `agent_pane_busy` retries; mutable only so tests need not wait. */
+export const startRetry = { attempts: 6, delayMs: 1_000 };
+
+/**
+ * Start a member's agent. A pane whose shell is not ready yet is retried; one
+ * that stays occupied (e.g. a stray process attached to a fresh pane's
+ * console, seen live on Windows) is replaced by a new pane next to it, and
+ * the room records the move.
+ */
+async function startInFreePane(deps: Deps, room: Room, name: string, cwd: string, env: Record<string, string>): Promise<void> {
+  const member = room.members[name]!;
+  const start = () => deps.herdr.agentStart(member.herdrName, member.kind, member.paneId, 60_000, agentArgs(member.kind, deps.env));
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await start();
+    } catch (error) {
+      if (!(error instanceof HerdrError) || error.code !== "agent_pane_busy") throw error;
+      if (attempt < startRetry.attempts) {
+        await new Promise((resolve) => setTimeout(resolve, startRetry.delayMs));
+        continue;
+      }
+    }
+    const occupied = member.paneId;
+    const fresh = await deps.herdr.paneSplit(occupied, { direction: "down", cwd, env });
+    member.paneId = fresh;
+    try {
+      await saveRoom(deps.env, room);
+    } catch (error) {
+      // Keep room.json and the panes in agreement: undo the move.
+      member.paneId = occupied;
+      await deps.herdr.paneClose(fresh).catch(() => undefined);
+      throw error;
+    }
+    deps.out(`${name}: pane ${occupied} is occupied; using ${fresh}`);
+    return await start();
+  }
 }
 
 // ---------------------------------------------------------------- down
@@ -221,6 +271,14 @@ export async function redeliver(deps: Deps, roomFlag: string | undefined, seq: n
   if (!event || !isMessage(event)) throw new SplError(`No message with seq ${seq}`);
   if (event.from !== self.name) throw new SplError(`Message ${seq} was sent by ${event.from}; only its sender can redeliver it`);
   const view = foldCases(events).get(event.case);
+  const lastAttempt = events.findLast((e) => e.kind === "delivery" && e.ref === seq);
+  if (lastAttempt?.kind === "delivery" && lastAttempt.stage === "relaying" &&
+      (deps.now?.() ?? Date.now()) - Date.parse(lastAttempt.ts) < RELAY_GRACE_MS) {
+    throw new SplError(`Message ${seq} is being relayed by the room watcher right now; check ${event.to}'s pane in a minute.`);
+  }
+  if (view?.queued.includes(seq)) {
+    throw new SplError(`Message ${seq} is queued; the room watcher will deliver it (\`spl watch --room ${self.room.name}\` must be running).`);
+  }
   if (!force && !view?.failed.includes(seq)) {
     throw new SplError(view?.unconfirmed.includes(seq)
       ? `Message ${seq}'s delivery outcome is unknown; it may already be in ${event.to}'s pane. Check there first, then use \`spl redeliver --force ${seq}\` if it is missing.`
@@ -229,10 +287,81 @@ export async function redeliver(deps: Deps, roomFlag: string | undefined, seq: n
   await deliver(deps, self.room, event);
 }
 
-/** Hand a recorded message to Herdr and record the outcome. Throws if not delivered. */
+/**
+ * Hand a recorded message to Herdr and record the outcome. If this terminal
+ * cannot reach Herdr at all (an agent sandbox, seen live with Codex) and the
+ * room watcher is running, the message is queued for the watcher to relay.
+ * Otherwise a failure throws with the command to retry.
+ */
 async function deliver(deps: Deps, room: Room, event: MessageEvent): Promise<void> {
   const target = room.members[event.to];
   if (!target) throw new SplError(`Unknown member ${event.to}`);
+  const text = await render(deps, room, event);
+  let error: unknown = null;
+  try {
+    // Pane IDs are also the identity key, and work even if the herdr name was
+    // never assigned (e.g. the agent was started by hand after a dialog).
+    await handToAgent(deps, target.paneId, text);
+  } catch (e) {
+    error = e;
+  }
+  if (error === null) {
+    await appendEvent(deps.env, room.name, () => ({ kind: "delivery" as const, ref: event.seq, ok: true, error: null }), room);
+    deps.out(`${event.kind} ${event.case} (seq ${event.seq}) delivered to ${event.to}`);
+    return;
+  }
+  const reason = describe(error);
+  if (unreachable(error) && await lockHeldByLiveProcess(join(roomDir(deps.env, room.name), "watch.lock"))) {
+    await appendEvent(deps.env, room.name, () => ({ kind: "delivery" as const, ref: event.seq, ok: false, error: reason, stage: "queued" as const }), room);
+    // Worded as the success it is: agents read raw errors here as failure.
+    deps.out(`${event.kind} ${event.case} (seq ${event.seq}) recorded; the room watcher will deliver it within seconds. Nothing else to do.`);
+    return;
+  }
+  await appendEvent(deps.env, room.name, () => ({ kind: "delivery" as const, ref: event.seq, ok: false, error: reason }), room);
+  throw new SplError(`${event.kind} ${event.case} was recorded as seq ${event.seq} but NOT delivered to ${event.to}: ${reason}. ` +
+    (unreachable(error)
+      ? `This terminal cannot reach Herdr (an agent sandbox?). Start \`spl watch --room ${room.name}\` outside the sandbox so it can relay messages, then run \`spl redeliver ${event.seq}\`.`
+      : `Fix the cause, then run \`spl redeliver ${event.seq}\`.`));
+}
+
+/**
+ * Deliver one message queued by a sender that could not reach Herdr. Called
+ * by the watcher, which runs where Herdr is reachable. The claim is recorded
+ * first, so a relay that stops midway shows as unconfirmed, never as queued.
+ */
+export async function relay(deps: Deps, room: Room, event: MessageEvent): Promise<boolean> {
+  const target = room.members[event.to];
+  if (!target) return false;
+  const claimed = await appendEvent(deps.env, room.name, (events) => {
+    const last = events.findLast((e) => e.kind === "delivery" && e.ref === event.seq);
+    if (!last || last.kind !== "delivery" || last.stage !== "queued") throw new NotQueued();
+    return { kind: "delivery" as const, ref: event.seq, ok: false, error: "relaying", stage: "relaying" as const };
+  }, room).catch((error: unknown) => {
+    if (error instanceof NotQueued) return null;
+    throw error;
+  });
+  if (!claimed) return false;
+  let error: string | null = null;
+  try {
+    await handToAgent(deps, target.paneId, await render(deps, room, event));
+  } catch (e) {
+    error = describe(e);
+  }
+  await appendEvent(deps.env, room.name, () => ({ kind: "delivery" as const, ref: event.seq, ok: error === null, error }), room);
+  deps.out(error === null
+    ? `relayed ${event.kind} ${event.case} (seq ${event.seq}) from ${event.from} to ${event.to}`
+    : `could not relay ${event.kind} ${event.case} (seq ${event.seq}) to ${event.to}: ${error}`);
+  return error === null;
+}
+
+class NotQueued extends Error {}
+
+/** A failure to reach Herdr at all, as opposed to Herdr refusing the prompt. */
+function unreachable(error: unknown): boolean {
+  return error instanceof HerdrError && error.code === "cli_failed";
+}
+
+async function render(deps: Deps, room: Room, event: MessageEvent): Promise<string> {
   let body = event.text;
   if (body.length > INLINE_LIMIT) {
     const dir = join(roomDir(deps.env, room.name), "messages");
@@ -246,20 +375,49 @@ async function deliver(deps: Deps, room: Room, event: MessageEvent): Promise<voi
     await writeFile(file, event.text, "utf8");
     body = `The full message is long; read it from this file before acting:\n${file}`;
   }
-  let error: string | null = null;
-  try {
-    // Pane IDs are also the identity key, and work even if the herdr name was
-    // never assigned (e.g. the agent was started by hand after a dialog).
-    await deps.herdr.prompt(target.paneId, envelope(event.kind, event.case, event.from, body, event.kind === "reply" && event.closes === true));
-  } catch (e) {
-    error = describe(e);
+  return envelope(event.kind, event.case, event.from, body, event.kind === "reply" && event.closes === true);
+}
+
+/** A relay claim younger than this is in flight; an older one was interrupted. */
+const RELAY_GRACE_MS = 60_000;
+
+/** Submission checks; mutable only so tests need not wait. */
+export const submitCheck = { waitMs: 3_000, pollMs: 250 };
+
+/**
+ * Prompt an agent and make sure the text was submitted, not left in its input
+ * box. Seen live: Claude Code kept a long prompt as "[Pasted text ...]" and
+ * ignored Herdr's Enter. If the agent does not start working and its screen
+ * shows unsent pasted text, press Enter once more.
+ */
+export async function handToAgent(deps: Deps, paneId: string, text: string): Promise<void> {
+  await deps.herdr.prompt(paneId, text);
+  // Checked after the prompt, whatever the state before it: an agent that was
+  // working a moment earlier may have settled just as the text arrived.
+  if (await startsWorking(deps, paneId)) return;
+  if (!(await holdsUnsentPaste(deps, paneId))) return;
+  // Re-check right before pressing: never press Enter into a dialog.
+  const status = await deps.herdr.agentStatus(paneId).catch(() => null);
+  if (status !== "idle" && status !== "done") return;
+  await deps.herdr.sendKeys(paneId, ["enter"]);
+  if (!(await startsWorking(deps, paneId))) deps.out(`  warning: ${paneId} may still hold the message unsent in its input box`);
+}
+
+/** A "[Pasted text" marker on the input line (the last few screen lines), not in older output. */
+async function holdsUnsentPaste(deps: Deps, paneId: string): Promise<boolean> {
+  const screen = await deps.herdr.agentRead(paneId).catch(() => "");
+  const bottom = screen.split(/\r?\n/).filter((line) => line.trim()).slice(-4);
+  return bottom.some((line) => /\[Pasted text/i.test(line));
+}
+
+async function startsWorking(deps: Deps, paneId: string): Promise<boolean> {
+  const deadline = Date.now() + submitCheck.waitMs;
+  for (;;) {
+    const status = await deps.herdr.agentStatus(paneId).catch(() => null);
+    if (status === "working" || status === "blocked") return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, submitCheck.pollMs));
   }
-  await appendEvent(deps.env, room.name, () => ({ kind: "delivery" as const, ref: event.seq, ok: error === null, error }), room);
-  if (error !== null) {
-    throw new SplError(`${event.kind} ${event.case} was recorded as seq ${event.seq} but NOT delivered to ${event.to}: ${error}. ` +
-      `Fix the cause, then run \`spl redeliver ${event.seq}\`.`);
-  }
-  deps.out(`${event.kind} ${event.case} (seq ${event.seq}) delivered to ${event.to}`);
 }
 
 // ---------------------------------------------------------------- views
@@ -274,6 +432,7 @@ export async function status(deps: Deps, roomFlag: string | undefined): Promise<
   for (const c of cases) {
     const last = c.messages.at(-1)!;
     const warn = (c.failed.length ? `  UNDELIVERED seq ${c.failed.join(",")}` : "") +
+      (c.queued.length ? `  QUEUED seq ${c.queued.join(",")} (the watcher will deliver)` : "") +
       (c.unconfirmed.length ? `  UNCONFIRMED seq ${c.unconfirmed.join(",")}` : "");
     deps.out(`${c.id.padEnd(5)} ${c.lead} -> ${c.peer.padEnd(4)} ${c.state.padEnd(18)} last ${last.kind} seq ${last.seq} ${last.ts}${warn}`);
   }

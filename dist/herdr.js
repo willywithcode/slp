@@ -21,6 +21,10 @@ export class Herdr {
         this.bin = bin;
     }
     async call(args) {
+        return parse(await this.run(args))?.result ?? {};
+    }
+    /** Run a command and return its stdout; errors are herdr's JSON on stderr. */
+    async run(args) {
         const { code, stdout, stderr } = await this.exec(this.bin, args);
         if (code !== 0) {
             const body = parse(stderr) ?? parse(stdout);
@@ -29,7 +33,7 @@ export class Herdr {
                 throw new HerdrError(error.code, String(error.message ?? error.code));
             throw new HerdrError("cli_failed", (stderr || stdout).trim() || `herdr exited with ${code}`);
         }
-        return parse(stdout)?.result ?? {};
+        return stdout;
     }
     async workspaceCreate(opts) {
         const r = await this.call(["workspace", "create", "--cwd", opts.cwd, "--label", opts.label, ...envArgs(opts.env), "--no-focus"]);
@@ -38,6 +42,9 @@ export class Herdr {
     async paneSplit(paneId, opts) {
         const r = await this.call(["pane", "split", paneId, "--direction", opts.direction, "--cwd", opts.cwd, ...envArgs(opts.env), "--no-focus"]);
         return required(r.pane?.pane_id, "pane.pane_id");
+    }
+    async paneClose(paneId) {
+        await this.call(["pane", "close", paneId]);
     }
     async workspaceClose(workspaceId) {
         await this.call(["workspace", "close", workspaceId]);
@@ -65,6 +72,17 @@ export class Herdr {
     }
     async notify(title, body) {
         await this.call(["notification", "show", title, "--body", body, "--sound", "request"]);
+    }
+    async agentStatus(target) {
+        const r = await this.call(["agent", "get", target]);
+        return typeof r.agent?.agent_status === "string" ? r.agent.agent_status : null;
+    }
+    async sendKeys(target, keys) {
+        await this.call(["agent", "send-keys", target, ...keys]);
+    }
+    /** The agent's visible screen. The CLI prints plain text, not JSON. */
+    async agentRead(target) {
+        return this.run(["agent", "read", target, "--source", "visible"]);
     }
     /** Submit text to an agent without waiting for it to finish its turn. */
     async prompt(target, text) {

@@ -98,7 +98,9 @@ export async function resolveSelf(env: Env, roomFlag?: string): Promise<Self> {
       if (member.paneId === paneId) return { room, name: memberName, member };
     }
   }
-  throw new SplError(`This terminal (pane ${paneId ?? "unknown"}) is not a member of any SPL room.`);
+  throw new SplError(`This terminal (pane ${paneId ?? "unknown"}) is not a member of any SPL room. ` +
+    "If you are an agent in a room, your commands may be running in a shared background server " +
+    "with another pane's environment (Codex: restart it with --no-daemon).");
 }
 
 export async function resolveRoom(env: Env, roomFlag?: string): Promise<Room> {

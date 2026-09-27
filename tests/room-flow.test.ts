@@ -3,8 +3,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as cmd from "../src/commands.js";
 import { foldCases } from "../src/cases.js";
-import { appendEvent, readEvents } from "../src/log.js";
-import { deps, FakeHerdrCli, tempHome } from "./helpers.js";
+import { acquireLock, appendEvent, readEvents } from "../src/log.js";
+import { Herdr } from "../src/herdr.js";
+import { DEFAULT_WATCH } from "../src/watch.js";
+import { watchTick } from "../src/watcher.js";
+import { loadRoom } from "../src/room.js";
+import { deps, FakeHerdrCli, sandboxed, tempHome } from "./helpers.js";
 
 async function room(opts: Partial<cmd.UpOptions> = {}) {
   const home = await tempHome();
@@ -26,9 +30,9 @@ describe("spl up", () => {
     expect(starts).toEqual([["demo-lead", "claude"], ["demo-p1", "codex"], ["demo-p2", "codex"], ["demo-sup", "claude"]]);
     // Agents must be able to run `spl` without an approval dialog.
     const leadStart = cli.calls.find((c) => c[1] === "start" && c[2] === "demo-lead")!;
-    expect(leadStart.slice(leadStart.indexOf("--"))).toEqual(["--", "--allowedTools", "Bash(spl *)"]);
+    expect(leadStart.slice(leadStart.indexOf("--"))).toEqual(["--", "--allowedTools", "Bash(spl *)", "Bash(spl.cmd *)"]);
     const peerStart = cli.calls.find((c) => c[1] === "start" && c[2] === "demo-p1")!;
-    expect(peerStart.slice(peerStart.indexOf("--"))).toEqual(["--", "--add-dir", home]);
+    expect(peerStart.slice(peerStart.indexOf("--"))).toEqual(["--", "--no-daemon", "--sandbox", "workspace-write", "--add-dir", home]);
     expect(cli.prompts.map((p) => p.target)).toEqual(["demo-lead", "demo-p1", "demo-p2", "demo-sup"]);
     expect(cli.prompts[1]!.text).toContain('You are "p1", the peer of SPL room "demo"');
     const splits = cli.calls.filter((c) => c[1] === "split");
@@ -203,5 +207,146 @@ describe("closing a case", () => {
     out.length = 0;
     await cmd.status(as("sup"), undefined);
     expect(out.join("\n")).toMatch(/c1\s+lead -> p1\s+closed/);
+  });
+});
+
+describe("startup dialogs", () => {
+  it("never sends the onboarding prompt into a folder-trust dialog Herdr reports as ready", async () => {
+    const home = await tempHome();
+    const cli = new FakeHerdrCli();
+    cli.screens.set("demo-p1", "Folder access\n  Trust this folder? Codex can read, edit, and run files here\n› 1. Trust and continue");
+    const out: string[] = [];
+    await cmd.up(deps(home, undefined, cli, out), { room: "demo", cwd: home, lead: "claude", peers: ["codex"], supervisor: null });
+    expect(cli.prompts.map((p) => p.target)).toEqual(["demo-lead"]);
+    expect(out.join("\n")).toMatch(/p1: NEEDS ATTENTION[^\n]*trust/i);
+  });
+});
+
+describe("busy panes", () => {
+  it("retries a pane whose shell is not ready yet", async () => {
+    const home = await tempHome();
+    const cli = new FakeHerdrCli();
+    cli.busyStarts.set("w9:p1", 2); // the root shell is still starting
+    const created = await cmd.up(deps(home, undefined, cli), { room: "demo", cwd: home, lead: "claude", peers: ["codex"], supervisor: null });
+    expect(created.members.lead!.paneId).toBe("w9:p1");
+    expect(cli.prompts.map((p) => p.target)).toEqual(["demo-lead", "demo-p1"]);
+  });
+
+  it("moves a member to a fresh pane when its pane stays occupied, and records it", async () => {
+    const home = await tempHome();
+    const cli = new FakeHerdrCli();
+    cli.busyStarts.set("w9:p1", 1_000); // e.g. a stray process owns the root pane
+    const out: string[] = [];
+    const created = await cmd.up(deps(home, undefined, cli, out), { room: "demo", cwd: home, lead: "claude", peers: ["codex"], supervisor: null });
+    expect(created.members.lead!.paneId).toBe("w9:p3");
+    expect((await loadRoom({ SPL_HOME: home }, "demo"))!.members.lead!.paneId).toBe("w9:p3");
+    expect(cli.prompts.map((p) => p.target)).toEqual(["demo-lead", "demo-p1"]);
+    expect(out.join("\n")).toMatch(/lead: pane w9:p1 is occupied; using w9:p3/);
+  });
+});
+
+describe("sandboxed senders and the room watcher", () => {
+  async function roomWithWatcher(watching: boolean) {
+    const r = await room();
+    for (const m of Object.values(r.created.members)) r.cli.agents.set(m.paneId, { status: "idle", seq: 1, kind: m.kind });
+    if (watching) await acquireLock(join(r.home, "rooms", "demo", "watch.lock")); // a live watcher
+    await cmd.send(r.as("lead"), undefined, "p1", "brief");
+    return r;
+  }
+
+  it("queues a message the sender cannot hand to Herdr, and the watcher relays it", async () => {
+    const { home, cli, created } = await roomWithWatcher(true);
+    const out: string[] = [];
+    const event = await cmd.handback(sandboxed(home, created.members.p1!.paneId, out), undefined, "c1", "done, evidence attached");
+    // Seen live: the raw "Access is denied" made a Codex peer think delivery
+    // failed and ask to redeliver. The sender must read this as success.
+    expect(out.join("\n")).toMatch(/recorded; the room watcher will deliver it within seconds\. Nothing else to do\./);
+    expect(out.join("\n")).not.toMatch(/denied|fail/i);
+    let view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    expect(view.queued).toEqual([event.seq]);
+    cli.prompts = [];
+    await watchTick({ env: { SPL_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined }, created, DEFAULT_WATCH);
+    expect(cli.prompts.map((p) => p.target)).toEqual([created.members.lead!.paneId]);
+    expect(cli.prompts[0]!.text).toMatch(/^\[SPL handback c1 from p1\]/);
+    view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    expect([view.queued, view.undelivered]).toEqual([[], []]);
+  });
+
+  it("fails loudly, naming `spl watch`, when no watcher can relay", async () => {
+    const { home, created } = await roomWithWatcher(false);
+    await expect(cmd.handback(sandboxed(home, created.members.p1!.paneId), undefined, "c1", "done"))
+      .rejects.toThrow(/cannot reach Herdr.*spl watch/);
+  });
+
+  it("does not let the sender redeliver a queued message", async () => {
+    const { home, created } = await roomWithWatcher(true);
+    const event = await cmd.handback(sandboxed(home, created.members.p1!.paneId), undefined, "c1", "done");
+    await expect(cmd.redeliver(sandboxed(home, created.members.p1!.paneId), undefined, event.seq, false)).rejects.toThrow(/queued/);
+  });
+});
+
+describe("confirming submission", () => {
+  it("presses Enter when the target left the message as unsent pasted text", async () => {
+    const { cli, created, as } = await room();
+    for (const m of Object.values(created.members)) cli.agents.set(m.paneId, { status: "idle", seq: 1, kind: m.kind });
+    cli.swallowEnter.add(created.members.p1!.paneId);
+    await cmd.send(as("lead"), undefined, "p1", "a long brief");
+    expect(cli.keys).toEqual([{ target: created.members.p1!.paneId, keys: ["enter"] }]);
+    expect(cli.agents.get(created.members.p1!.paneId)!.status).toBe("working");
+  });
+
+  it("presses nothing when the target started working", async () => {
+    const { cli, created, as } = await room();
+    for (const m of Object.values(created.members)) cli.agents.set(m.paneId, { status: "idle", seq: 1, kind: m.kind });
+    await cmd.send(as("lead"), undefined, "p1", "brief");
+    expect(cli.keys).toEqual([]);
+  });
+});
+
+describe("round-5 delivery fixes", () => {
+  async function started() {
+    const r = await room();
+    for (const m of Object.values(r.created.members)) r.cli.agents.set(m.paneId, { status: "idle", seq: 1, kind: m.kind });
+    return r;
+  }
+
+  it("still checks submission when the target was working a moment before", async () => {
+    const { cli, created, as } = await started();
+    cli.agents.get(created.members.p1!.paneId)!.status = "working";
+    cli.swallowEnter.add(created.members.p1!.paneId);
+    await cmd.send(as("lead"), undefined, "p1", "brief");
+    expect(cli.keys).toEqual([{ target: created.members.p1!.paneId, keys: ["enter"] }]);
+  });
+
+  it("ignores a [Pasted text marker that is only in the scrollback, not the input line", async () => {
+    const { cli, created, as } = await started();
+    const pane = created.members.p1!.paneId;
+    cli.swallowEnter.add(pane);
+    cli.scrollback.set(pane, "> [Pasted text #7 +3 lines]\n" + "output line\n".repeat(20));
+    cli.exec = ((inner) => async (file: string, args: readonly string[]) => {
+      // After the prompt the input line is empty: only the old marker remains, far above.
+      if (args[0] === "agent" && args[1] === "read") return { code: 0, stdout: cli.scrollback.get(pane)! + "> ", stderr: "" };
+      return inner(file, args);
+    })(cli.exec);
+    await cmd.send({ ...as("lead"), herdr: new Herdr(cli.exec, "herdr") }, undefined, "p1", "brief");
+    expect(cli.keys).toEqual([]);
+  });
+
+  it("lets the watcher relay a forced resend queued after an earlier delivery", async () => {
+    const { home, cli, created, as } = await started();
+    const brief = await cmd.send(as("lead"), undefined, "p1", "brief");
+    await acquireLock(join(home, "rooms", "demo", "watch.lock"));
+    await cmd.redeliver(sandboxed(home, created.members.lead!.paneId), undefined, brief.seq, true);
+    expect(foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!.queued).toEqual([brief.seq]);
+    cli.prompts = [];
+    await watchTick({ env: { SPL_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined }, created, DEFAULT_WATCH);
+    expect(cli.prompts.map((p) => p.target)).toEqual([created.members.p1!.paneId]);
+  });
+
+  it("refuses even a forced redeliver while the watcher is relaying the message", async () => {
+    const { home, as } = await started();
+    const brief = await cmd.send(as("lead"), undefined, "p1", "brief");
+    await appendEvent({ SPL_HOME: home }, "demo", () => ({ kind: "delivery" as const, ref: brief.seq, ok: false, error: "relaying", stage: "relaying" as const }));
+    await expect(cmd.redeliver(as("lead"), undefined, brief.seq, true)).rejects.toThrow(/being relayed/);
   });
 });

@@ -9,8 +9,9 @@ records every message in an append-only room log before delivering it with
 reminders for the Supervisor and the human, and can optionally ask Jev to judge
 each case's communication.
 
-Status: v0.2 (see `docs/plans/active/spl-v0.2.md`). Verified by offline tests
-and live Herdr runs on Windows; macOS/Ubuntu are covered by CI once it runs.
+Status: v0.2 (see `docs/plans/completed/spl-v0.2.md`). Verified by offline
+tests on Windows, macOS and Ubuntu (CI) and by live Herdr runs on Windows with
+Claude and Codex agents.
 
 ## Requirements
 
@@ -47,7 +48,12 @@ spl up feature-x --lead claude --peers codex,codex --supervisor claude --watch
 This creates workspace `spl:feature-x` (Lead top-left, Supervisor below it,
 Peers on the right, watcher at the bottom), starts each agent with permission
 to run `spl` only (ADR 0004), and tells it to run `spl guide`. If an agent
-stops at a first-run dialog, `spl up` prints what to paste once it is resolved.
+stops at a first-run dialog (e.g. "trust this folder?"), `spl up` never answers
+it for you: it prints what to paste once you have resolved it.
+
+Run rooms with `--watch` when Peers are sandboxed (Codex): a sandbox cannot
+reach Herdr, so their messages are queued and the watcher relays them within
+seconds. Agents still ask you before running anything other than `spl`.
 Then give the task to the Lead in its pane. When done, from a terminal outside
 the room: `spl down feature-x`.
 
@@ -114,8 +120,10 @@ your repository (ADR 0002):
 Appends are serialized by a lock directory that records its owner; a lock is
 only taken over when its owner process is gone. A message Herdr refused is
 marked `UNDELIVERED` and can be retried with `spl redeliver <seq>`. A message
-with no recorded outcome (the sender died mid-delivery) is `UNCONFIRMED`: it
-may already be in the target pane, so retrying needs `--force` after checking.
+from a sender that cannot reach Herdr is `QUEUED` until the watcher relays it.
+A message with no recorded outcome (the sender died mid-delivery) is
+`UNCONFIRMED`: it may already be in the target pane, so retrying needs
+`--force` after checking.
 `spl down` moves the room to `rooms/.archive/`.
 
 ## Limits

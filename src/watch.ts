@@ -46,7 +46,9 @@ export function evaluate(s: Snapshot, c: WatchConfig): Alert[] {
     for (const m of view.messages) {
       if (!view.undelivered.includes(m.seq) || s.now - Date.parse(m.ts) <= c.undeliveredMs) continue;
       const error = view.errors[m.seq];
-      const what = error !== undefined
+      const what = view.queued.includes(m.seq)
+        ? `it is queued for the room watcher but was not relayed. Is \`spl watch --room ${s.room.name}\` running outside any agent sandbox?`
+        : error !== undefined
         ? `delivery failed (${error}). ${m.from} can retry with \`spl redeliver ${m.seq}\` once the cause is fixed.`
         : `its delivery outcome is unknown (no confirmation was recorded). Check ${m.to}'s pane; only if it is missing, ${m.from} can run \`spl redeliver --force ${m.seq}\`.`;
       alerts.push({

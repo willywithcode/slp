@@ -57,9 +57,9 @@ export async function main(argv: string[], env: Env, deps: Omit<cmd.Deps, "env">
   const text = async (arg: string | undefined) => {
     if (values.file !== undefined) {
       if (arg !== undefined) throw new UsageError("Pass either TEXT or --file, not both");
-      return readFile(values.file, "utf8");
+      return decodeText(await readFile(values.file));
     }
-    if (arg === "-") return readStdin();
+    if (arg === "-") return decodeText(await readStdin());
     if (arg === undefined) throw new UsageError("Missing message text (TEXT, -, or --file PATH)");
     return arg;
   };
@@ -108,6 +108,7 @@ export async function main(argv: string[], env: Env, deps: Omit<cmd.Deps, "env">
       const lock = join(roomDir(env, target.name), "watch.lock");
       const token = await acquireLock(lock, {
         timeoutMs: 0,
+        reclaimForeign: false,
         busy: (owner) => `Room ${target.name} is already watched by pid ${owner?.pid ?? "unknown"}${owner ? ` on ${owner.host}` : ""}`,
       });
       try {
@@ -167,10 +168,20 @@ function jevOptions(mode: string, env: Env, http: typeof fetch = fetch): JevOpti
   return { mode, evaluate: createEvaluator({ apiKey, model }, http), threshold };
 }
 
-async function readStdin(): Promise<string> {
+async function readStdin(): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+/**
+ * UTF-8 (with or without BOM) or BOM-marked UTF-16, which Windows PowerShell
+ * 5.1 writes with `>` and Out-File.
+ */
+export function decodeText(bytes: Buffer): string {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString("utf16le");
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes.subarray(2)).swap16().toString("utf16le");
+  return bytes.toString("utf8").replace(/^\uFEFF/, "");
 }
 
 export async function run(argv: string[], env: Env): Promise<number> {

@@ -4,8 +4,7 @@ Date: 2026-09-26
 
 ## Status
 
-Active (implementation and verification complete; awaiting owner review and
-commit)
+Completed (2026-09-27)
 
 ## Outcome
 
@@ -114,6 +113,26 @@ re-review until no actionable findings.
   verified after the workspace was already gone. paseo-supervision stayed
   unchanged (`git status` clean).
 
+- [x] 8. Codex peer loop (2026-09-27, owner: "loop until complete"): the
+  default room (Claude lead/supervisor, Codex peers) on a disposable lab repo
+  with a failing test, fixed by p1, reviewed by p2, verified and closed by the
+  lead. Seven live runs (lab..lab7) exposed, each fixed tests-first:
+  Codex exits on `--add-dir` in a read-only folder (now `--sandbox
+  workspace-write`); Codex's shared daemon runs commands with another pane's
+  environment (`--no-daemon`); PowerShell blocks npm's `spl.ps1` (hint to use
+  `spl.cmd`, only for non-Claude agents after the hint itself caused a Claude
+  approval); a Codex trust dialog reported as idle would have been accepted by
+  the onboarding Enter (screen check, never answered); a stray process
+  occupying a fresh root pane (retry, then move to a new pane); sandboxed
+  senders cannot reach Herdr (queued + relayed by the watcher: 2-9 s live);
+  Claude left a long prompt as unsent pasted text (Enter on the input line);
+  the queued notice read as a failure to Codex (reworded); drafts written into
+  the repository (guide steers to stdin); PowerShell BOM/UTF-16 files; and a
+  date-dependent test clock. Review rounds 5-6: 8 findings fixed; Codex
+  convergence check reports no actionable findings. Final run lab7: closed in
+  2 minutes, no alerts, no manual approval (earlier project approvals were
+  already saved), repository changed by exactly the fix.
+
 ## Decisions
 
 - 2026-09-26: Owner asked to use mustang's workflow for spl: plans here,
@@ -138,12 +157,13 @@ re-review until no actionable findings.
 
 ## Result
 
-- 78 offline tests (7 files), strict typecheck and build pass on Windows.
+- 96 offline tests (7 files), strict typecheck and build pass.
 - Live Herdr runs verified rooms, messaging, watch alerts, `--close` and
   `spl down`.
-- Not verified: CI on GitHub (workflow added, never run), macOS/Ubuntu
-  execution, Codex as a peer kind (launch args untested live), Jev against the
-  real TypeSafe API (no key used; fake fetch only), harness-core `go test`
-  (Go not installed).
-- Follow-up: standalone binaries; a Codex-peer live run; a shadow-mode Jev
-  trial with an owner-provided key.
+- CI green on Windows, macOS and Ubuntu (Node 22/24); Codex peers verified
+  live on Windows.
+- Not verified: live Herdr runs on macOS/Ubuntu, Jev against the real
+  TypeSafe API (needs an owner key; fake fetch only), harness-core `go test`
+  (Go not installed; the release workflow runs it).
+- Follow-up: standalone binaries; a shadow-mode Jev trial with an
+  owner-provided key; live runs on macOS/Ubuntu.

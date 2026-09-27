@@ -17,7 +17,8 @@ async function setup(supervisor: string | null = "claude") {
   const home = await tempHome();
   const cli = new FakeHerdrCli();
   const room = await cmd.up(deps(home, undefined, cli), { room: "demo", cwd: home, lead: "claude", peers: ["codex"], supervisor });
-  const clock = { now: Date.parse("2026-09-26T10:00:00Z") };
+  // Starts at the real time: events are stamped with the real clock.
+  const clock = { now: Date.now() };
   const out: string[] = [];
   const d = { herdr: new Herdr(cli.exec, "herdr"), out: (s: string) => { out.push(s); }, now: () => clock.now };
   const pane = (m: string) => room.members[m]!.paneId;
@@ -30,6 +31,7 @@ describe("spl watch --once", () => {
   it("raises an alert across runs, delivers it to the supervisor and a notification, and never repeats it", async () => {
     const { home, cli, clock, pane, watch } = await setup();
     await cmd.send(deps(home, pane("lead"), cli), undefined, "p1", "brief");
+    cli.agents.set(pane("p1"), { status: "idle", seq: 2, kind: "codex" }); // worked on it, then settled
     cli.prompts = [];
 
     expect(await watch()).toBe(0); // first observation of p1 idle
@@ -150,5 +152,15 @@ describe("spl watch: room identity", () => {
     const d = { env: { SPL_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined };
     await expect(watchTick(d, room, DEFAULT_WATCH)).rejects.toThrow(/replaced/);
     expect((await readEvents({ SPL_HOME: home }, "demo")).filter((e) => e.kind === "alert")).toEqual([]);
+  });
+});
+
+describe("spl watch: a watcher on another host", () => {
+  it("is never displaced by age, since its liveness cannot be checked", async () => {
+    const { home, watch } = await setup();
+    const lock = join(home, "rooms", "demo", "watch.lock");
+    await mkdir(lock);
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ token: "far", pid: 1234, host: "other-host", at: Date.now() - 86_400_000 }));
+    await expect(watch()).rejects.toThrow(/already watched by pid 1234 on other-host/);
   });
 });

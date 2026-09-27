@@ -20,6 +20,18 @@ one another.
 - Herdr has no idempotent prompt, so a message without any recorded outcome is
   *unconfirmed*, not failed: it may already be in the target pane.
   `spl redeliver` retries only refused deliveries unless `--force` is given.
+- A sender that cannot reach Herdr at all (an agent sandbox) records the
+  message as *queued* when a room watcher is alive; the watcher claims it
+  (`relaying`) and delivers it. A relay that stops midway shows as
+  unconfirmed, never as queued, so it is not sent twice automatically. A
+  resend queued after an earlier delivery is relayed too, and no resend (even
+  forced) is accepted while a relay claim is younger than a minute.
+- Delivery is confirmed after every prompt: if the target does not start
+  working, its input line (the last screen lines) still shows unsent pasted
+  text, and it is still idle, Enter is pressed once more (seen live with Claude
+  Code and long prompts).
+- Message text is read as UTF-8 (BOM stripped) or BOM-marked UTF-16, which
+  Windows PowerShell 5.1 writes.
 - The lock records its owner (token, pid, host) and is taken over only when
   that process is gone (or, for another host, after 5 minutes); takeovers are
   serialized with releases through an owned guard, and a holder only removes
