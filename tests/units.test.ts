@@ -101,18 +101,17 @@ describe("config", () => {
 describe("agent arguments", () => {
   const base = { model: "m", effort: "high", sessionId: null, markerDir: null, slpHome: "/h", projectDir: "/h/p" };
 
-  it("pre-approves only slp for Claude, and keeps Reviewers read-only", () => {
-    const sup = agentArgs("claude", { ...base, role: "supervisor", sessionId: "u" });
-    expect(sup).toEqual(expect.arrayContaining(["--session-id", "u", "Bash(slp *)"]));
+  it("gives Claude seats their role's settings file", () => {
+    const sup = agentArgs("claude", { ...base, role: "supervisor", sessionId: "u", settingsPath: "/h/settings/claude-supervisor.json" });
+    expect(sup).toEqual(expect.arrayContaining(["--session-id", "u", "--settings", "/h/settings/claude-supervisor.json"]));
     expect(sup).not.toContain("--add-dir");
-    expect(sup).not.toContain("--disallowedTools");
-    expect(agentArgs("claude", { ...base, role: "reviewer" })).toEqual(expect.arrayContaining(["--disallowedTools", "Edit", "Write"]));
-    expect(agentArgs("claude", { ...base, role: "lead" })).not.toContain("--add-dir");
+    expect(sup).not.toContain("--allowedTools");
   });
 
-  it("runs Codex in its own process with slp's home writable", () => {
+  it("runs Codex in its own process, never asking inside its sandbox (ADR 0016)", () => {
     const args = agentArgs("codex", { ...base, role: "peer", markerDir: "/h/p/seats/L1-T1", writableDirs: ["/repo/.git"] });
     expect(args.slice(0, 3)).toEqual(["--no-daemon", "--sandbox", "workspace-write"]);
+    expect(args).toEqual(expect.arrayContaining(["--ask-for-approval", "never", "sandbox_workspace_write.network_access=true"]));
     expect(args).toEqual(expect.arrayContaining(["-c", "model_reasoning_effort=high", "--add-dir", "/h", "/h/p/seats/L1-T1", "/repo/.git"]));
   });
 });

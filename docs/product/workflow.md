@@ -114,8 +114,11 @@ free. A seat's first letter carries its introduction and its brief together.
 
 ### 6. Your part while the team runs
 
-- **Dialogs and prompts.** Only you answer them. A seat waiting on one for
-  3 minutes gets you a Herdr notification and its superior a note.
+- **Dialogs and prompts.** Startup dialogs are only yours. Permission
+  prompts go to the Supervisor while you are out of the loop (the default):
+  it allows what serves the seat's brief and refuses the rest, recorded, and
+  a Peer's Lead hears of it. With `"human": { "inLoop": true }` they are
+  yours: slp notifies you with the command after 3 minutes.
 - **Holds.** Answer the Supervisor when it brings you a held landing.
 - **Incidents.** The watch reads the Leads' and Peers' transcripts. What it
   finds is recorded (`slp incidents`); pages (destructive commands) always

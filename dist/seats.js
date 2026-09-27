@@ -10,7 +10,8 @@ import { HerdrError } from "./herdr.js";
 import { atStartupDialog, describe, queueLetter, recordUndelivered, sendLetter, watchLockPath } from "./letters.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { agentArgs } from "./roles.js";
-import { envCommands, joinCommands, readyProbe, shellFamily } from "./shells.js";
+import { envCommands, joinCommands, pathPrepend, readyProbe, shellFamily } from "./shells.js";
+import { writeClaudeSettings, writeGitShim } from "./permissions.js";
 import { fold } from "./state.js";
 /** Retries while a fresh pane's shell is not ready; mutable only for tests. */
 export const startRetry = { attempts: 6, delayMs: 1_000 };
@@ -41,7 +42,9 @@ export async function openSeat(deps, project, config, spec) {
         // A split stays in the tab of the pane it came from: a seat's, or the Human's main tab.
         tabId = [...state.seats.values()].find((s) => s.paneId === from)?.tabId ?? project.mainTabId ?? "";
     }
-    const ready = (pane) => prepare(deps, pane, choice.launcher.env, choice.launcher.prep);
+    const shimDir = await writeGitShim(deps.env, spec.role);
+    const settingsPath = choice.launcher.agent === "claude" ? await writeClaudeSettings(deps.env, spec.role) : null;
+    const ready = (pane) => prepare(deps, pane, choice.launcher.env, choice.launcher.prep, shimDir);
     await ready(paneId);
     const sessionId = choice.launcher.agent === "claude" ? randomUUID() : null;
     let marker = null;
@@ -51,7 +54,7 @@ export async function openSeat(deps, project, config, spec) {
     }
     const args = agentArgs(choice.launcher.agent, {
         role: spec.role, model: choice.model, effort: choice.effort, sessionId, markerDir: marker,
-        slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: spec.writableDirs ?? [],
+        slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: spec.writableDirs ?? [], settingsPath,
     });
     const name = herdrName(project.id, spec.name);
     const started = await startAgent(deps, name, choice.launcher.agent, paneId, args, { cwd: spec.cwd, env: paneEnv, ready });
@@ -90,17 +93,16 @@ export async function openSeat(deps, project, config, spec) {
     return { seat, attention: null };
 }
 /** Set the launcher's environment and run its preparation in the pane's own shell. */
-async function prepare(deps, paneId, env, prep) {
+async function prepare(deps, paneId, env, prep, shimDir) {
     const expanded = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, v === null ? null : expandHome(v)]));
-    if (!Object.keys(expanded).length && !prep.powershell && !prep.sh)
-        return;
     const family = await detectShell(deps, paneId);
     const extra = family === "powershell" ? prep.powershell : family === "sh" ? prep.sh : undefined;
     if ((prep.powershell || prep.sh) && !extra)
         throw new SlpError(`This launcher has no preparation for a ${family} shell (pane ${paneId}).`);
     const nonce = randomUUID().slice(0, 8);
     const probe = readyProbe(family, nonce);
-    await deps.herdr.paneRun(paneId, joinCommands(family, [...envCommands(family, expanded), ...(extra ? [extra] : []), probe.command]));
+    // The role's git shim goes first on PATH (ADR 0016).
+    await deps.herdr.paneRun(paneId, joinCommands(family, [pathPrepend(family, shimDir), ...envCommands(family, expanded), ...(extra ? [extra] : []), probe.command]));
     await deps.herdr.paneWaitOutput(paneId, probe.match, 30_000);
 }
 export const processName = (pid) => new Promise((resolve) => {
@@ -197,11 +199,13 @@ export async function moveSeat(deps, project, config, seat, move) {
         throw new SlpError(`${seat.name} already runs on ${move.launcher}.`);
     const paneEnv = { SLP_PROJECT: project.id };
     const paneId = await deps.herdr.paneSplit(seat.paneId, { direction: "down", cwd: move.cwd, env: paneEnv });
-    const ready = (pane) => prepare(deps, pane, launcher.env, launcher.prep);
+    const shimDir = await writeGitShim(deps.env, seat.role);
+    const settingsPath = launcher.agent === "claude" ? await writeClaudeSettings(deps.env, seat.role) : null;
+    const ready = (pane) => prepare(deps, pane, launcher.env, launcher.prep, shimDir);
     await ready(paneId);
     const args = agentArgs(launcher.agent, {
         role: seat.role, model: seat.model, effort: seat.effort, sessionId: null, resume: move.resume, markerDir: seat.marker,
-        slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: move.writableDirs,
+        slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: move.writableDirs, settingsPath,
     });
     // The old agent goes first: one agent per session, and Herdr names are unique.
     await deps.herdr.paneClose(seat.paneId).catch(() => undefined);

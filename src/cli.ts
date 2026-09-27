@@ -14,6 +14,7 @@ import { projectHere, whoAmI } from "./identity.js";
 import { amendLane, openLane } from "./lanes.js";
 import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
+import { permit } from "./permit.js";
 import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
 import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
@@ -61,7 +62,7 @@ const HUMAN_TOO = new Set(["incidents", "ack"]);
 
 /** Verbs only a seat runs; everything else is the Human's. */
 const SEAT_VERBS = new Set([
-  "whoami", "context", "diff", "test", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
+  "whoami", "context", "diff", "test", "permit", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
   "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "done", "findings",
 ]);
 
@@ -197,6 +198,12 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
       return 0;
     }
     case "diff": arity(1); deps.out(await diffOf(a, args[0]!)); return 0;
+    case "permit": {
+      arity(2, 3);
+      if (args[1] !== "allow" && args[1] !== "deny") throw new UsageError('permit <seat> allow|deny "why"');
+      await permit(a, await loadConfig(deps.env), args[0]!, args[1] === "allow", args[2] ?? "");
+      return 0;
+    }
     case "test": arity(0, 1); deps.out(await testOf(a, args[0] ?? null)); return 0;
     case "whoami":
       arity(0);

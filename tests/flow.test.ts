@@ -26,10 +26,15 @@ describe("start", () => {
     const intro = await w.inbox("sup");
     expect(intro[0]).toContain("[SLP INTRO");
     expect(intro[0]).toContain("slp guide");
-    // Claude seats get a fixed session id and only slp pre-approved.
+    // Claude seats get a fixed session id and their role's settings (ADR 0016).
     const start = w.cli.calls.find((c) => c[0] === "agent" && c[1] === "start")!;
     expect(start).toContain("--session-id");
-    expect(start).toContain("Bash(slp *)");
+    const settings = JSON.parse(await readFile(start[start.indexOf("--settings") + 1]!, "utf8"));
+    expect(settings.permissions.allow).toContain("Bash(slp *)");
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(["Edit", "Bash(git push *)", "Read(~/.secrets/**)"]));
+    // The role's git shim goes first on PATH in the seat's shell.
+    const prep = w.cli.ran.find((r) => r.pane === sup.paneId)!.command;
+    expect(prep.startsWith(`export PATH='${join(w.home, "bin", "supervisor")}':"$PATH"`)).toBe(true);
     expect(await readFile(join(w.home, "projects", w.project, "CONTEXT.md"), "utf8")).toContain("# Concept");
   });
 
@@ -189,8 +194,9 @@ describe("lanes", () => {
     const s = await w.state();
     const critic = s.seats.get("L1-critic")!;
     expect(critic.role).toBe("critic");
-    expect(w.cli.calls.find((c) => c[0] === "agent" && c[1] === "start" && c[2]!.endsWith("l1-critic"))).toEqual(
-      expect.arrayContaining(["--disallowedTools", "Edit", "Write"]));
+    const start = w.cli.calls.find((c) => c[0] === "agent" && c[1] === "start" && c[2]!.endsWith("l1-critic"))!;
+    const settings = JSON.parse(await readFile(start[start.indexOf("--settings") + 1]!, "utf8"));
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(["Edit", "Write", "Bash(git add *)", "Bash(git commit *)"]));
     expect((await w.inbox("L1-critic")).some((m) => m.includes("make it greet people"))).toBe(true);
     w.cli.idleAll();
     await expect(w.as("L1-critic", ["findings", "--finding", "weird :: x"])).rejects.toThrow(/missing\|added/);
