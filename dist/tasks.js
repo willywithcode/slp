@@ -3,9 +3,10 @@ import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
 import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto, removeWorktree } from "./git.js";
+import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
-import { sendLetter } from "./letters.js";
+import { describe, sendLetter } from "./letters.js";
 import { closeSeat, openSeat } from "./seats.js";
 import { fold } from "./state.js";
 const ACTIVE = new Set(["running", "handed-back", "rework"]);
@@ -70,30 +71,30 @@ export async function startTask(a, config, input) {
     }
     const draft = { id, title: input.title, goal: input.goal, acceptance: input.acceptance, owned: input.owned,
         outOfScope: input.outOfScope, context: input.context, branch, workdir };
+    await append(deps.env, project.id, () => ({
+        kind: "task-start", lane: lane.id, task: id, title: input.title, goal: input.goal, acceptance: input.acceptance,
+        owned: input.owned, outOfScope: input.outOfScope, context: input.context, mode: input.parallel ? "parallel" : "lane",
+        branch, workdir, baseCommit: laneHead, seat: id,
+    }));
     try {
         const opened = await openSeat(deps, project, config, {
             name: id, role: "peer", lane: lane.id, task: id, cwd: workdir, preset: input.preset,
             place: { kind: "split", from: a.seat.paneId, direction: "right" },
             writableDirs: [await commonDir(project.root)],
             intro: intro(id, "peer", ` (lane ${lane.id}, task ${id})`, "codex"),
+            brief: { letter: "TASK", from: a.seat.name, text: brief(draft, lane) },
         });
         if (opened.attention)
             deps.out(`NEEDS ATTENTION: ${opened.attention}`);
     }
     catch (error) {
+        await append(deps.env, project.id, () => ({ kind: "task-cut", task: id, reason: `its seat could not open: ${describe(error)}` }));
         if (input.parallel) {
             await removeWorktree(project.root, workdir);
             await git(project.root, ["branch", "-D", branch]);
         }
         throw error;
     }
-    await append(deps.env, project.id, () => ({
-        kind: "task-start", lane: lane.id, task: id, title: input.title, goal: input.goal, acceptance: input.acceptance,
-        owned: input.owned, outOfScope: input.outOfScope, context: input.context, mode: input.parallel ? "parallel" : "lane",
-        branch, workdir, baseCommit: laneHead, seat: id,
-    }));
-    await sendLetter(deps, project.id, { letter: "TASK", from: a.seat.name, to: id, lane: lane.id, task: id,
-        text: brief(draft, lane) });
     return fold(await readLedger(deps.env, project.id)).tasks.get(id);
 }
 /** A Peer hands its task back to the Lead. */
@@ -232,21 +233,22 @@ export async function startReview(a, config, target, focus) {
     }
     const number = [...a.state.reviews.values()].filter((r) => r.lane === lane.id).length + 1;
     const id = `${lane.id}-R${number}`;
+    await append(deps.env, project.id, () => ({
+        kind: "review-start", lane: lane.id, review: id, target: target.task ?? lane.id, focus, seat: id,
+    }));
+    const text = [
+        `Review ${what}`, "", "Acceptance:", ...acceptance.map((x) => `- ${x}`), "",
+        `The change: slp diff ${target.task ?? lane.id}   (${range})`, `Working copy: ${cwd} (read only)`,
+        ...(focus.trim() ? ["", `Focus: ${focus}`] : []),
+    ].join("\n");
     const opened = await openSeat(deps, project, config, {
         name: id, role: "reviewer", lane: lane.id, task: target.task, cwd,
         place: { kind: "split", from: a.seat.paneId, direction: "down" },
         intro: intro(id, "reviewer", ` (lane ${lane.id})`, "claude"),
+        brief: { letter: "REVIEW", from: a.seat.name, text },
     });
     if (opened.attention)
         deps.out(`NEEDS ATTENTION: ${opened.attention}`);
-    await append(deps.env, project.id, () => ({
-        kind: "review-start", lane: lane.id, review: id, target: target.task ?? lane.id, focus, seat: id,
-    }));
-    await sendLetter(deps, project.id, { letter: "REVIEW", from: a.seat.name, to: id, lane: lane.id, task: target.task, text: [
-            `Review ${what}`, "", "Acceptance:", ...acceptance.map((x) => `- ${x}`), "",
-            `The change: slp diff ${target.task ?? lane.id}   (${range})`, `Working copy: ${cwd} (read only)`,
-            ...(focus.trim() ? ["", `Focus: ${focus}`] : []),
-        ].join("\n") });
 }
 export function parseFinding(raw) {
     const parts = raw.split("::").map((p) => p.trim());
@@ -299,4 +301,26 @@ export async function diffOf(a, target) {
     const limit = 200_000;
     return `$ git diff ${range}   (in ${cwd})\n\n${stat.stdout.trim() || "(no changes)"}\n\n` +
         (full.length > limit ? `${full.slice(0, limit)}\n[slp] diff cut at ${limit} characters; read the files for the rest.` : full);
+}
+/**
+ * Run the project's gate on a task's or the lane's copy, for a Lead or
+ * Reviewer judging the work. Bounded well below an agent's command limit;
+ * the full gate still runs when the lane reports ready.
+ */
+export async function testOf(a, target) {
+    const lane = laneOf(a);
+    let cwd = lane.workdir;
+    const name = target ?? (a.seat.role === "reviewer" ? a.seat.task : null) ?? lane.id;
+    if (name !== lane.id) {
+        const task = a.state.tasks.get(name);
+        if (!task || task.lane !== lane.id)
+            throw new SlpError(`No task ${name} in lane ${lane.id} (or name the lane: ${lane.id})`);
+        if (task.mode === "parallel" && ACTIVE.has(task.state))
+            cwd = task.workdir;
+    }
+    const command = a.state.settings.gate ?? await detectGate(cwd);
+    if (!command)
+        return "No gate configured: the Supervisor sets one with `slp set-project --gate \"...\"`.";
+    const result = await runGate(command, cwd, Math.min(a.state.settings.gateTimeoutMinutes, 8) * 60_000);
+    return `$ ${command}   (in ${cwd})\n${result.ok ? "PASSED" : "FAILED"} in ${Math.round(result.durationMs / 1000)}s\n\n${result.tail}`;
 }

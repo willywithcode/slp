@@ -5,11 +5,11 @@ export const ROLE_SPECS = {
         watched: false, readOnly: true, editsContext: true,
     },
     lead: {
-        verbs: [...COMMON, "message", "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "answer", "incidents", "ack", "diff"],
+        verbs: [...COMMON, "message", "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "answer", "incidents", "ack", "diff", "test"],
         watched: true, readOnly: true, editsContext: false,
     },
     peer: { verbs: [...COMMON, "done", "ask"], watched: true, readOnly: false, editsContext: false },
-    reviewer: { verbs: [...COMMON, "done", "ask", "diff"], watched: false, readOnly: true, editsContext: false },
+    reviewer: { verbs: [...COMMON, "done", "ask", "diff", "test"], watched: false, readOnly: true, editsContext: false },
     critic: { verbs: [...COMMON, "findings"], watched: false, readOnly: true, editsContext: false },
 };
 export function mayRun(role, verb) {

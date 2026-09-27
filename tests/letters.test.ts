@@ -172,12 +172,15 @@ describe("seats", () => {
       if (args[0] === "agent" && args[1] === "start" && args.includes("codex")) w.cli.screens.set(args[args.indexOf("--pane") + 1]!, dialog);
       return r;
     };
-    // No watcher: the Lead is told plainly; nothing reaches the pane.
-    await expect(w.as("L1", ["start-task", "--title", "a", "--goal", "g", "--accept", "x", "--own", "src/a/**"])).rejects.toThrow(/startup dialog only the Human answers/);
+    // No watcher: the task is recorded, the Human is told; nothing reaches the pane.
+    expect(await w.as("L1", ["start-task", "--title", "a", "--goal", "g", "--accept", "x", "--own", "src/a/**"])).toBe(0);
+    expect(w.out.some((l) => l.includes("NEEDS ATTENTION") && l.includes("slp intro L1-T1"))).toBe(true);
     const peer = await w.pane("L1-T1");
     expect(w.cli.promptsTo(peer)).toEqual([]);
     expect(w.cli.keys).toEqual([]);
     expect(w.cli.notifications.some((n) => n.title.includes("L1-T1 needs you"))).toBe(true);
+    expect((await w.state()).letters.find((l) => l.to === "L1-T1")!.status).toBe("failed");
+    await expect(w.slp(["intro", "L1-T1"])).rejects.toThrow(/startup dialog only the Human answers/);
 
     // With a watcher: letters wait, the Human is told once, delivery follows the answer.
     const release = await holdWatch(w);
@@ -191,6 +194,12 @@ describe("seats", () => {
       w.cli.screens.delete(peer);
       await watcher.tick();
       expect(w.cli.promptsTo(peer).at(-1)).toContain("one more thing");
+      // The Human resends the first letter: introduction and brief together.
+      w.cli.idleAll();
+      expect(await w.slp(["intro", "L1-T1"])).toBe(0);
+      const first = w.cli.promptsTo(peer).at(-1)!;
+      expect(first).toContain("[SLP TASK");
+      expect(first).toMatch(/You are "L1-T1"[\s\S]*Task L1-T1: a/);
     } finally {
       await release();
     }

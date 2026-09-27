@@ -105,10 +105,18 @@ export async function stop(deps, project, state, force) {
     await saveProject(deps.env, { ...project, watchPane: null });
     deps.out(`team stopped${open.length ? `; lanes still open: ${open.map((l) => `${l.id} (${l.branch})`).join(", ")}` : ""}`);
 }
+/** Send a seat its first letter (introduction and brief) again, e.g. after the Human answered a startup dialog. */
 export async function resendIntro(deps, project, state, name) {
     const seat = state.seats.get(name);
     if (!seat?.live)
         throw new SlpError(`No live seat "${name}"`);
+    const events = await readLedger(deps.env, project.id);
+    const opened = events.findLast((e) => e.kind === "seat" && e.name === name)?.seq ?? 0;
+    const first = events.find((e) => e.kind === "letter" && e.to === name && e.seq > opened);
+    if (first?.kind === "letter") {
+        await sendLetter(deps, project.id, { letter: first.letter, from: first.from, to: name, lane: first.lane, task: first.task, text: first.text });
+        return;
+    }
     const where = seat.lane ? ` (lane ${seat.lane}${seat.task ? `, task ${seat.task}` : ""})` : ` for ${project.root}`;
     await sendLetter(deps, project.id, { letter: "INTRO", from: "slp", to: name, lane: seat.lane, task: seat.task,
         text: intro(name, seat.role, where, seat.agent) });

@@ -91,9 +91,9 @@ export async function openLane(deps: Deps, project: Project, config: Config, inp
   const lead = await openSeat(deps, project, config, {
     name: id, role: "lead", lane: id, task: null, cwd: workdir, place: { kind: "tab", label: `${id} ${input.title}`.slice(0, 40) },
     intro: intro(id, "lead", ` (lane ${id}: ${input.title})`, config.launchers[config.roles.lead.use[0]!]?.agent ?? "claude"),
+    brief: { letter: "DIRECTIVE", from: "sup", text: directive(lane) },
   });
   if (lead.attention) deps.out(`NEEDS ATTENTION: ${lead.attention}`);
-  await sendLetter(deps, project.id, { letter: "DIRECTIVE", from: "sup", to: id, text: directive(lane), lane: id });
 
   if (input.humanWords.trim()) await openCritic(deps, project, config, lane, lead.seat.paneId);
   return lane;
@@ -107,15 +107,15 @@ async function openCritic(deps: Deps, project: Project, config: Config, lane: La
       name, role: "critic", lane: lane.id, task: null, cwd: lane.workdir,
       place: { kind: "split", from: beside, direction: "down" },
       intro: intro(name, "critic", ` (lane ${lane.id})`, config.launchers[config.roles.critic.use[0]!]?.agent ?? "claude"),
+      brief: {
+        letter: "MESSAGE", from: "slp",
+        text: [
+          "Read this lane against the Human's own words and the concept (`slp context`), then report with `slp findings`.",
+          "", "The Human's words:", lane.humanWords, "", "The lane:", directive(lane),
+        ].join("\n"),
+      },
     });
     if (critic.attention) deps.out(`NEEDS ATTENTION: ${critic.attention}`);
-    await sendLetter(deps, project.id, {
-      letter: "MESSAGE", from: "slp", to: name, lane: lane.id,
-      text: [
-        "Read this lane against the Human's own words and the concept (`slp context`), then report with `slp findings`.",
-        "", "The Human's words:", lane.humanWords, "", "The lane:", directive(lane),
-      ].join("\n"),
-    });
   } catch (error) {
     deps.out(`The Critic for ${lane.id} could not open (${describe(error)}); the lane runs without it.`);
   }

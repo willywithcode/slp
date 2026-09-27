@@ -14,7 +14,7 @@ import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
 import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
-import { acceptTask, cutTask, diffOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask } from "./tasks.js";
+import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask } from "./tasks.js";
 import { closeLane, render, resendIntro, setProject, start, stop } from "./team.js";
 import { Watcher } from "./watcher.js";
 const USAGE = `slp: a Supervisor, Leads and Peers working on your repository through Herdr
@@ -45,7 +45,7 @@ export class UsageError extends Error {
 }
 /** Verbs only a seat runs; everything else is the Human's. */
 const SEAT_VERBS = new Set([
-    "whoami", "context", "diff", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
+    "whoami", "context", "diff", "test", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
     "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "done", "findings",
 ]);
 export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
@@ -167,6 +167,10 @@ async function seatVerb(command, args, v, a, text, arity) {
         case "diff":
             arity(1);
             deps.out(await diffOf(a, args[0]));
+            return 0;
+        case "test":
+            arity(0, 1);
+            deps.out(await testOf(a, args[0] ?? null));
             return 0;
         case "whoami":
             arity(0);

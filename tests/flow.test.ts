@@ -405,6 +405,18 @@ describe("concept, diff and help", () => {
     await expect(w.as("L1-T1", ["diff", "L1-T1"])).rejects.toThrow(/peer does not run/);
   });
 
+  it("runs the project's tests for a Lead, and a seat's first letter carries its brief", async () => {
+    const w = await started();
+    await w.as("sup", ["set-project", "--gate", "node -e \"console.log('suite ok')\""]);
+    await w.as("sup", LANE);
+    const first = (await w.inbox("L1"))[0]!;
+    expect(first).toContain("[SLP DIRECTIVE");
+    expect(first).toMatch(/You are "L1"[\s\S]*Outcome: The app greets by name/);
+    w.cli.idleAll();
+    expect(await w.as("L1", ["test"])).toBe(0);
+    expect(w.out.at(-1)).toMatch(/PASSED[\s\S]*suite ok/);
+  });
+
   it("a seat asking for help gets its guide", async () => {
     const w = await started();
     await w.as("sup", ["open-lane", "--help"]);

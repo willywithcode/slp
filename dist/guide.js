@@ -12,7 +12,11 @@ const SHARED = `## What holds for every seat
 - Long text goes through stdin: \`slp <verb> ... - <<'EOF'\` (bash) or a
   PowerShell here-string piped to \`slp.cmd <verb> ... -\`. Drafts on disk
   belong in a temporary directory, never in the repository.
-- Letters arrive between your turns as "[SLP <KIND> #n from <seat>]".`;
+- Letters arrive between your turns as "[SLP <KIND> #n from <seat>]". Your
+  first letter carries your brief; there is nothing else to fetch.
+- Run each slp command on its own: one per call, never chained with \`&&\`,
+  \`;\` or a pipe. slp commands run without asking; anything else waits for
+  the Human's approval.`;
 const GUIDES = {
     supervisor: `# slp guide: Supervisor
 
@@ -103,7 +107,8 @@ work did (not what it says), keep the lane one straight line.
 ## Judging hand-backs
 
 A HANDBACK lists outcome, changes, checks and what is left. Check the record
-(\`slp diff L1-T1\` shows the change; \`slp diff L1\` the whole lane), then:
+(\`slp diff L1-T1\` shows the change, \`slp diff L1\` the whole lane;
+\`slp test L1-T1\` runs the project's tests on it), then:
 \`slp accept L1-T1 ["note"]\` · \`slp rework L1-T1 "what to change and why"\` ·
 \`slp cut L1-T1 "why"\`.
 For a large or risky change, get a clean-context review first:
@@ -166,8 +171,8 @@ output; call nothing confirmed that you did not trace.
 ## Reading
 
 \`slp diff <target>\` (target from your REVIEW letter) shows the change; read
-files in your working copy directly. Other commands ask the Human first, so
-prefer reading; the gate runs the tests.
+files in your working copy directly; \`slp test\` runs the project's tests.
+Other commands ask the Human first, so prefer these.
 
 ## Reporting
 

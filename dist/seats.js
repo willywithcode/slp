@@ -7,7 +7,7 @@ import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir, slpHome } from "./core/paths.js";
 import { HerdrError } from "./herdr.js";
-import { atStartupDialog, describe, queueLetter, sendLetter, watchLockPath } from "./letters.js";
+import { atStartupDialog, describe, queueLetter, recordUndelivered, sendLetter, watchLockPath } from "./letters.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { agentArgs } from "./roles.js";
 import { envCommands, joinCommands, readyProbe, shellFamily } from "./shells.js";
@@ -64,18 +64,24 @@ export async function openSeat(deps, project, config, spec) {
     const seat = fold(await readLedger(deps.env, project.id)).seats.get(event.name);
     // Herdr may report an agent ready while a folder-trust dialog is shown; the
     // letter's Enter would then accept it on the Human's behalf. Never.
+    const first = {
+        letter: spec.brief?.letter ?? "INTRO", from: spec.brief?.from ?? "slp", to: spec.name,
+        text: spec.brief ? `${spec.intro}\n\n${spec.brief.text}` : spec.intro, lane: spec.lane, task: spec.task,
+    };
     if (started.blocked || await atStartupDialog(deps, paneId)) {
-        // With a watcher, the introduction (and anything sent after it) waits
+        // With a watcher, the first letter (and anything sent after it) waits
         // until the agent is ready; without one the Human resends it.
         const watched = await lockHeldByLiveProcess(watchLockPath(deps.env, project.id));
         if (watched)
-            await queueLetter(deps, project.id, { letter: "INTRO", from: "slp", to: spec.name, text: spec.intro, lane: spec.lane, task: spec.task });
+            await queueLetter(deps, project.id, first);
+        else
+            await recordUndelivered(deps, project.id, first, "startup dialog on screen");
         const then = watched ? "slp introduces it once it is ready" : `then run \`slp intro ${spec.name}\``;
         await deps.herdr.notify(`slp: ${spec.name} needs you`, `Answer the startup dialog in pane ${paneId}; ${then}.`).catch(() => undefined);
         return { seat, attention: `${spec.name} waits on a startup dialog (folder trust) in pane ${paneId}; answer it yourself; ${then}.` };
     }
     try {
-        await sendLetter(deps, project.id, { letter: "INTRO", from: "slp", to: spec.name, text: spec.intro, lane: spec.lane, task: spec.task });
+        await sendLetter(deps, project.id, first);
     }
     catch (error) {
         return { seat, attention: `${spec.name} is open but its introduction was not delivered (${describe(error)}).` };

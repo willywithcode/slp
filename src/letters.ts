@@ -288,3 +288,13 @@ export async function queueLetter(deps: Deps, project: string, draft: LetterDraf
   await record(deps, project, event.seq, false, null, "queued", "busy");
   return event.seq;
 }
+
+/** Record a letter that could not be handed over, with why; `slp redeliver` or `slp intro` sends it later. */
+export async function recordUndelivered(deps: Deps, project: string, draft: LetterDraft, why: string): Promise<number> {
+  const event = await append(deps.env, project, () => ({
+    kind: "letter" as const, letter: draft.letter, from: draft.from, to: draft.to, text: draft.text,
+    lane: draft.lane ?? null, task: draft.task ?? null,
+  }));
+  await record(deps, project, event.seq, false, why);
+  return event.seq;
+}

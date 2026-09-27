@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { chooseSeat, expandHome, type Config } from "./core/config.js";
 import type { Deps } from "./core/deps.js";
 import { SlpError } from "./core/errors.js";
-import { append, readLedger, type Role } from "./core/ledger.js";
+import { append, readLedger, type LetterKind, type Role } from "./core/ledger.js";
 import { projectDir, slpHome } from "./core/paths.js";
 import type { Project } from "./core/project.js";
 import { HerdrError } from "./herdr.js";
-import { atStartupDialog, describe, queueLetter, sendLetter, watchLockPath } from "./letters.js";
+import { atStartupDialog, describe, queueLetter, recordUndelivered, sendLetter, watchLockPath } from "./letters.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { agentArgs } from "./roles.js";
 import { envCommands, joinCommands, readyProbe, shellFamily, type ShellFamily } from "./shells.js";
@@ -34,8 +34,13 @@ export interface SeatSpec {
   preset?: string | null;
   /** More directories the agent must write to (codex sandbox). */
   writableDirs?: readonly string[];
-  /** Text of the INTRO letter sent once the agent is up. */
+  /** Who the seat is and where to start (`intro()`). */
   intro: string;
+  /**
+   * The seat's work, sent with its introduction as one first letter, so it
+   * never starts without it (seen live: a Critic went looking for its brief).
+   */
+  brief?: { letter: LetterKind; from: string; text: string };
 }
 
 export interface Opened { seat: Seat; attention: string | null }
@@ -96,17 +101,22 @@ export async function openSeat(deps: Deps, project: Project, config: Config, spe
 
   // Herdr may report an agent ready while a folder-trust dialog is shown; the
   // letter's Enter would then accept it on the Human's behalf. Never.
+  const first = {
+    letter: spec.brief?.letter ?? "INTRO" as LetterKind, from: spec.brief?.from ?? "slp", to: spec.name,
+    text: spec.brief ? `${spec.intro}\n\n${spec.brief.text}` : spec.intro, lane: spec.lane, task: spec.task,
+  };
   if (started.blocked || await atStartupDialog(deps, paneId)) {
-    // With a watcher, the introduction (and anything sent after it) waits
+    // With a watcher, the first letter (and anything sent after it) waits
     // until the agent is ready; without one the Human resends it.
     const watched = await lockHeldByLiveProcess(watchLockPath(deps.env, project.id));
-    if (watched) await queueLetter(deps, project.id, { letter: "INTRO", from: "slp", to: spec.name, text: spec.intro, lane: spec.lane, task: spec.task });
+    if (watched) await queueLetter(deps, project.id, first);
+    else await recordUndelivered(deps, project.id, first, "startup dialog on screen");
     const then = watched ? "slp introduces it once it is ready" : `then run \`slp intro ${spec.name}\``;
     await deps.herdr.notify(`slp: ${spec.name} needs you`, `Answer the startup dialog in pane ${paneId}; ${then}.`).catch(() => undefined);
     return { seat, attention: `${spec.name} waits on a startup dialog (folder trust) in pane ${paneId}; answer it yourself; ${then}.` };
   }
   try {
-    await sendLetter(deps, project.id, { letter: "INTRO", from: "slp", to: spec.name, text: spec.intro, lane: spec.lane, task: spec.task });
+    await sendLetter(deps, project.id, first);
   } catch (error) {
     return { seat, attention: `${spec.name} is open but its introduction was not delivered (${describe(error)}).` };
   }

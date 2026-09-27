@@ -15,7 +15,7 @@ import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
 import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
-import { acceptTask, cutTask, diffOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
+import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
 import { closeLane, render, resendIntro, setProject, start, stop } from "./team.js";
 import { Watcher } from "./watcher.js";
 
@@ -53,7 +53,7 @@ type Arity = (n: number, m?: number) => void;
 
 /** Verbs only a seat runs; everything else is the Human's. */
 const SEAT_VERBS = new Set([
-  "whoami", "context", "diff", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
+  "whoami", "context", "diff", "test", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
   "start-task", "start-review", "accept", "rework", "cut", "report", "ask", "done", "findings",
 ]);
 
@@ -160,6 +160,7 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
       return 0;
     }
     case "diff": arity(1); deps.out(await diffOf(a, args[0]!)); return 0;
+    case "test": arity(0, 1); deps.out(await testOf(a, args[0] ?? null)); return 0;
     case "whoami":
       arity(0);
       deps.out(`${a.seat.name}: ${a.seat.role}${a.seat.lane ? ` in lane ${a.seat.lane}` : ""}${a.seat.task ? `, task ${a.seat.task}` : ""}` +
