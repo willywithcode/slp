@@ -108,13 +108,17 @@ Each phase: tests first at agreed seams, implement, live run on a disposable
 lab repository with Claude and Codex seats, independent review until no
 actionable findings, docs and ADRs current.
 
-1. **Foundations**: project state, roles as data, seat launch with per-role
-   kind/model/prompt, `slp start` (Supervisor seat + watcher), letters and
-   outbox on top of v0.2 delivery, verb dispatch with role permissions.
+1. **Foundations**: project state, roles as data, launchers and accounts
+   (ADR 0011: per-role model and effort, Codex rotation, Lead picks a Peer's
+   model per task), seat launch through the owner's `claude-as`/`codex-as`
+   commands, `slp start` (Supervisor seat + watcher), letters and outbox on
+   top of v0.2 delivery, verb dispatch with role permissions.
 2. **Lanes and tasks**: lane verbs, branches and worktree slots, write-set
    checks, gate detection and runs, landing, asks and answers with reminders.
 3. **Reviewer and Critic** seats and their verbs.
-4. **Watch v2**: transcript readers, facts, ledger shapes, incident book.
+4. **Watch v2**: transcript readers, facts, ledger shapes, incident book,
+   usage-limit detection routed to the Supervisor, which may move the seat
+   to another account (the session is resumed there).
 5. **Jev sensor** and `slp calibrate`.
 6. **Jev loop control** in shadow, then enforced above calibrated thresholds.
 7. **Release**: mustang skill renamed and rewritten as `slp`, workflow docs,
@@ -145,6 +149,8 @@ actionable findings, docs and ADRs current.
 ## Decisions
 
 - 2026-09-27: Decisions listed under Context; ADRs 0006-0010.
+- 2026-09-27: Accounts and models per seat, Supervisor-managed account
+  moves on usage limits (ADR 0011).
 - 2026-09-27: The local folder is still named `spl` (held open by another
   process); rename when free.
 
