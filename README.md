@@ -36,7 +36,7 @@ by live Herdr runs on Windows with Claude Code and Codex seats.
 The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.4.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.5.tar.gz
 slp help
 ```
 
@@ -98,18 +98,62 @@ troubleshooting: [docs/product/workflow.md](docs/product/workflow.md).
 ## Accounts and models
 
 `~/.slp/config.json` (written with defaults on first use) names launchers
-(which agent, on which account) and, per role, the launchers, model and
-effort. Several launchers for one role rotate (e.g. Peers across Codex
-accounts). A Lead picks a Peer preset per task (`sol`, `luna`, `flash`). An
-account that runs out is reported to the Supervisor, which may move the seat
-with `slp move-seat <seat> <launcher>`; the session resumes there. slp never
-reads account secrets: a launcher only names environment variables and a
-preparation command that the seat's own shell runs (ADR 0011).
+(which agent, started how) and, per role, the launchers, model and effort.
+The defaults use the plain `claude`, `codex` and `agy` on their logged-in
+account, the same on every machine. Several launchers for one role rotate
+(e.g. Peers across Codex accounts). A Lead picks a Peer preset per task
+(`sol`, `luna`, `flash`). An account that runs out is reported to the
+Supervisor, which may move the seat with `slp move-seat <seat> <launcher>`;
+the session resumes there.
+
+### Several accounts
+
+A launcher may name a command of your own that picks the account; slp
+types it in the seat's shell with its arguments appended, and Herdr
+recognises the agent it starts. slp never reads or stores a token: your
+command does, the same way on the command line and in a team (ADR 0011).
+
+```json
+"launchers": {
+  "claude":      { "agent": "claude" },
+  "claude-acc1": { "agent": "claude", "command": "claude-as acc1" },
+  "codex-acc2":  { "agent": "codex",  "command": "codex-as acc2" }
+},
+"roles": { "lead": { "use": ["claude-acc1"] }, "peer": { "use": ["codex", "codex-acc2"] } }
+```
+
+The config can be the same on every machine; each machine defines its own
+`claude-as` and `codex-as`, taking the account first and passing every other
+argument to the agent. For example:
+
+- Windows (PowerShell profile), with the token saved once per machine by
+  `Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content "$HOME/.secrets/claude-acc1.txt"`:
+
+  ```powershell
+  function claude-as { $acc, $rest = $args
+    $t = Get-Content "$HOME/.secrets/claude-$acc.txt" | ConvertTo-SecureString
+    $env:CLAUDE_CODE_OAUTH_TOKEN = [Net.NetworkCredential]::new('', $t).Password
+    try { & (Get-Command claude -CommandType Application)[0].Source @rest } finally { Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN } }
+  ```
+
+- macOS (`~/.zshrc`, token in the Keychain via
+  `security add-generic-password -a acc1 -s claude-code -w`) and Ubuntu
+  (`~/.bashrc`, token via `secret-tool store --label claude-acc1 service claude-code account acc1`):
+
+  ```sh
+  claude-as() { acc=$1; shift
+    tok=$(security find-generic-password -a "$acc" -s claude-code -w 2>/dev/null || secret-tool lookup service claude-code account "$acc")
+    CLAUDE_CODE_OAUTH_TOKEN=$tok command claude "$@"; }
+  ```
+
+- Codex, anywhere: one home per account, logged in once
+  (`CODEX_HOME=~/.codex-acc2 codex login`), and
+  `codex-as() { acc=$1; shift; CODEX_HOME=~/.codex-$acc command codex "$@"; }`
+  (PowerShell: set `$env:CODEX_HOME` around `& codex @rest` the same way).
 
 One-time setup per account: open each agent once in the repository and
 answer its folder-trust dialog; on Windows, open each Codex account once so it
-can set up its sandbox (a Codex seat whose sandbox is not set up asks you to
-approve every command).
+can set up its sandbox (until then its Peers' commands fail).
 
 ## Permissions
 

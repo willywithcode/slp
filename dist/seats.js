@@ -10,7 +10,7 @@ import { HerdrError } from "./herdr.js";
 import { atStartupDialog, describe, queueLetter, recordUndelivered, sendLetter, watchLockPath } from "./letters.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { agentArgs } from "./roles.js";
-import { envCommands, joinCommands, pathPrepend, readyProbe, shellFamily } from "./shells.js";
+import { commandLine, envCommands, joinCommands, pathPrepend, readyProbe, shellFamily } from "./shells.js";
 import { writeClaudeSettings, writeGitShim } from "./permissions.js";
 import { fold } from "./state.js";
 /** Retries while a fresh pane's shell is not ready; mutable only for tests. */
@@ -45,7 +45,7 @@ export async function openSeat(deps, project, config, spec) {
     const shimDir = await writeGitShim(deps.env, spec.role);
     const settingsPath = choice.launcher.agent === "claude" ? await writeClaudeSettings(deps.env, spec.role) : null;
     const ready = (pane) => prepare(deps, pane, choice.launcher.env, choice.launcher.prep, shimDir);
-    await ready(paneId);
+    const family = await ready(paneId);
     const sessionId = choice.launcher.agent === "claude" ? randomUUID() : null;
     let marker = null;
     if (choice.launcher.agent === "codex") {
@@ -57,7 +57,7 @@ export async function openSeat(deps, project, config, spec) {
         slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: spec.writableDirs ?? [], settingsPath,
     });
     const name = herdrName(project.id, spec.name);
-    const started = await startAgent(deps, name, choice.launcher.agent, paneId, args, { cwd: spec.cwd, env: paneEnv, ready });
+    const started = await startAgent(deps, name, choice.launcher.agent, paneId, args, { cwd: spec.cwd, env: paneEnv, ready, command: choice.launcher.command ?? null, family });
     paneId = started.paneId;
     const event = await append(deps.env, project.id, () => ({
         kind: "seat", name: spec.name, role: spec.role, lane: spec.lane, task: spec.task,
@@ -104,6 +104,7 @@ async function prepare(deps, paneId, env, prep, shimDir) {
     // The role's git shim goes first on PATH (ADR 0016).
     await deps.herdr.paneRun(paneId, joinCommands(family, [pathPrepend(family, shimDir), ...envCommands(family, expanded), ...(extra ? [extra] : []), probe.command]));
     await deps.herdr.paneWaitOutput(paneId, probe.match, 30_000);
+    return family;
 }
 export const processName = (pid) => new Promise((resolve) => {
     const [file, args] = process.platform === "win32"
@@ -148,7 +149,11 @@ function blockedAtStartup(error) {
  * running: it is recorded and left for the Human to answer.
  */
 async function startAgent(deps, name, agent, paneId, args, fresh) {
+    let family = fresh.family;
     const attempt = async (pane) => {
+        // A launcher's own command (e.g. claude-as acc1) is typed into the shell; Herdr then sees the agent.
+        if (fresh.command)
+            return startByCommand(deps, pane, commandLine(family, fresh.command, args));
         try {
             await deps.herdr.agentStart(name, agent, pane, 60_000, args);
             return { paneId: pane, blocked: false };
@@ -174,7 +179,7 @@ async function startAgent(deps, name, agent, paneId, args, fresh) {
         const other = await deps.herdr.paneSplit(paneId, { direction: "down", cwd: fresh.cwd, env: fresh.env });
         deps.out(`pane ${paneId} is occupied; using ${other}`);
         // The new pane's shell needs the account's environment too.
-        await fresh.ready(other);
+        family = await fresh.ready(other);
         return attempt(other);
     }
 }
@@ -202,7 +207,7 @@ export async function moveSeat(deps, project, config, seat, move) {
     const shimDir = await writeGitShim(deps.env, seat.role);
     const settingsPath = launcher.agent === "claude" ? await writeClaudeSettings(deps.env, seat.role) : null;
     const ready = (pane) => prepare(deps, pane, launcher.env, launcher.prep, shimDir);
-    await ready(paneId);
+    const family = await ready(paneId);
     const args = agentArgs(launcher.agent, {
         role: seat.role, model: seat.model, effort: seat.effort, sessionId: null, resume: move.resume, markerDir: seat.marker,
         slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: move.writableDirs, settingsPath,
@@ -211,7 +216,7 @@ export async function moveSeat(deps, project, config, seat, move) {
     await deps.herdr.paneClose(seat.paneId).catch(() => undefined);
     let started;
     try {
-        started = await startAgent(deps, herdrName(project.id, seat.name), launcher.agent, paneId, args, { cwd: move.cwd, env: paneEnv, ready });
+        started = await startAgent(deps, herdrName(project.id, seat.name), launcher.agent, paneId, args, { cwd: move.cwd, env: paneEnv, ready, command: launcher.command ?? null, family });
     }
     catch (error) {
         await append(deps.env, project.id, () => ({ kind: "seat-stop", name: seat.name, reason: `move to ${move.launcher} failed: ${describe(error)}` }));
@@ -234,4 +239,28 @@ export async function moveSeat(deps, project, config, seat, move) {
     await sendLetter(deps, project.id, notice).catch(() => undefined);
     deps.out(`${seat.name} moved to ${move.launcher} in ${started.paneId}`);
     return { seat: moved, attention: null };
+}
+/** How long a launcher's own command may take to bring its agent up; mutable for tests. */
+export const commandStart = { timeoutMs: 60_000, pollMs: 500 };
+/**
+ * Type the launcher's command into the pane's shell and wait until Herdr sees
+ * the agent there (it recognises agents by their process, however started).
+ */
+async function startByCommand(deps, pane, line) {
+    await deps.herdr.paneRun(pane, line);
+    const deadline = Date.now() + commandStart.timeoutMs;
+    for (;;) {
+        const status = await deps.herdr.agentStatus(pane).catch(() => null);
+        if (status === "blocked")
+            return { paneId: pane, blocked: true };
+        if (status === "idle" || status === "done" || status === "working")
+            return { paneId: pane, blocked: false };
+        if (Date.now() >= deadline) {
+            const shown = (await deps.herdr.paneRead(pane, 15).catch(() => "")).trim();
+            throw new SlpError(`No agent started in pane ${pane} from: ${line}` + (shown ? `
+The pane shows:
+${shown}` : ""));
+        }
+        await new Promise((resolve) => setTimeout(resolve, commandStart.pollMs));
+    }
 }

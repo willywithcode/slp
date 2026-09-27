@@ -79,7 +79,7 @@ const CODEX_PROMPT = "• Running npm install\n  Would you like to run the follo
 
 async function team(inLoop: boolean): Promise<World> {
   const w = await World.create();
-  const c = defaultConfig("linux");
+  const c = defaultConfig();
   c.human.inLoop = inLoop;
   await writeFile(join(w.home, "config.json"), JSON.stringify(c));
   await w.slp(["start"]);

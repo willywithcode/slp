@@ -36,3 +36,10 @@ through Herdr.
 
 - Anything Herdr cannot carry or observe is outside slp; features are
   designed around Herdr's CLI and socket API, never around a side channel.
+
+## Update 2026-09-28
+
+A seat whose launcher names its own command is started by typing that
+command into its pane (`herdr pane run`); Herdr recognises the agent by its
+process and tracks it like one it started. Every seat still opens in a Herdr
+pane and is reached only through Herdr.

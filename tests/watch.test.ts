@@ -107,7 +107,7 @@ describe("the watch", () => {
 
   async function withPeer(mail: boolean): Promise<World> {
     const w = await World.create();
-    const config = defaultConfig("linux");
+    const config = defaultConfig();
     config.watch.mail = mail;
     await writeFile(join(w.home, "config.json"), JSON.stringify(config));
     await w.slp(["start"]);
@@ -159,7 +159,7 @@ describe("the watch", () => {
 
   it("tells the Supervisor when a seat's account runs out, with where to move it", async () => {
     const w = await World.create();
-    const config = defaultConfig("linux");
+    const config = defaultConfig();
     config.launchers["codex-b"] = { agent: "codex", env: { CODEX_HOME: "{home}/.codex-b" }, prep: {} };
     await writeFile(join(w.home, "config.json"), JSON.stringify(config));
     await w.slp(["start"]);
@@ -209,7 +209,7 @@ describe("moving a seat to another account", () => {
 
   async function world(): Promise<World> {
     const w = await World.create();
-    const config = defaultConfig("linux");
+    const config = defaultConfig();
     config.launchers["claude-b"] = { agent: "claude", env: { ANTHROPIC_API_KEY: null }, prep: {} };
     config.launchers["codex-b"] = { agent: "codex", env: { CODEX_HOME: "{home}/.codex-b" }, prep: {} };
     await writeFile(join(w.home, "config.json"), JSON.stringify(config));

@@ -13,6 +13,11 @@ import { configPath } from "./paths.js";
 const Agent = z.enum(["claude", "codex", "agy"]);
 const Launcher = z.object({
     agent: Agent,
+    // The command that starts the agent in the seat's shell, with slp's
+    // arguments appended: e.g. the owner's own "claude-as acc1" or
+    // "codex-as acc2", which pick the account. Absent: Herdr starts the plain
+    // agent. Each machine defines its own such commands (README).
+    command: z.string().min(1).optional(),
     // Set in the seat's shell before the agent starts; null unsets the variable.
     // "{home}" expands to the user's home directory.
     env: z.record(z.string(), z.string().nullable()).default({}),
@@ -62,56 +67,17 @@ const ConfigSchema = z.object({
             ctx.addIssue({ code: "custom", path: ["roles", role], message: "missing role" });
 });
 const OPUS = "claude-opus-5-5[1m]";
-function claudeToken(account) {
-    // Same steps as the owner's `claude-as`: decrypt the DPAPI-protected token in
-    // the seat's own shell; the value never passes through slp or Herdr.
-    return {
-        agent: "claude",
-        env: { ANTHROPIC_API_KEY: null },
-        prep: {
-            powershell: `$env:CLAUDE_CODE_OAUTH_TOKEN = [Net.NetworkCredential]::new('', (Get-Content "$HOME\\.secrets\\claude-${account}.txt" | ConvertTo-SecureString)).Password`,
-        },
-    };
-}
-function codexHome(account) {
-    // Same variables as the owner's `codex-as`.
-    return {
-        agent: "codex",
-        env: { CODEX_HOME: `{home}/.codex-${account}`, CODEX_SQLITE_HOME: "{home}/.codex", OPENAI_API_KEY: null },
-        prep: {},
-    };
-}
-/** Defaults per ADR 0011 on the owner's Windows machine; plain agents elsewhere. */
-export function defaultConfig(platform = process.platform) {
+/**
+ * The defaults: one account per agent, nothing secret, the same on every
+ * platform. Several accounts per agent are the owner's own launchers, set
+ * up per machine (README: "Several accounts"); slp never ships anyone's.
+ */
+export function defaultConfig() {
     const peerPresets = {
         sol: { model: "gpt-6-sol", effort: "high" },
         luna: { model: "gpt-6-luna", effort: "high" },
         flash: { launcher: "agy", model: "gemini-3.8-flash-high", effort: "high" },
     };
-    if (platform === "win32") {
-        return {
-            version: 1,
-            watch: { mail: false, budgetPerDay: 20 },
-            jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
-            human: { inLoop: false },
-            launchers: {
-                claude: { agent: "claude", env: {}, prep: {} },
-                "claude-acc1": claudeToken("acc1"),
-                "claude-acc2": claudeToken("acc2"),
-                "codex-acc1": { agent: "codex", env: { OPENAI_API_KEY: null }, prep: {} },
-                "codex-acc2": codexHome("acc2"),
-                "codex-acc3": codexHome("acc3"),
-                agy: { agent: "agy", env: {}, prep: {} },
-            },
-            roles: {
-                supervisor: { use: ["claude"], model: OPUS, effort: "xhigh", presets: {}, defaultPreset: null },
-                lead: { use: ["claude-acc1"], model: OPUS, effort: "high", presets: {}, defaultPreset: null },
-                reviewer: { use: ["claude-acc2"], model: OPUS, effort: "high", presets: {}, defaultPreset: null },
-                critic: { use: ["claude-acc2"], model: OPUS, effort: "high", presets: {}, defaultPreset: null },
-                peer: { use: ["codex-acc1", "codex-acc2", "codex-acc3"], model: "gpt-6-sol", effort: "high", presets: peerPresets, defaultPreset: "sol" },
-            },
-        };
-    }
     return {
         version: 1,
         watch: { mail: false, budgetPerDay: 20 },
@@ -140,7 +106,7 @@ export function parseConfig(value) {
     return parsed.data;
 }
 /** The owner's config, written from the defaults on first use so it can be edited. */
-export async function loadConfig(env, platform = process.platform) {
+export async function loadConfig(env) {
     const path = configPath(env);
     let raw = null;
     try {
@@ -151,7 +117,7 @@ export async function loadConfig(env, platform = process.platform) {
             throw error;
     }
     if (raw === null) {
-        const config = defaultConfig(platform);
+        const config = defaultConfig();
         await mkdir(dirname(path), { recursive: true });
         await writeAtomic(path, `${JSON.stringify(config, null, 2)}\n`);
         return config;

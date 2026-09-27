@@ -11,7 +11,7 @@ import { configPath } from "../src/core/paths.js";
 import { projectIdFor } from "../src/core/project.js";
 import { Herdr, type ExecResult } from "../src/herdr.js";
 import { submitCheck } from "../src/letters.js";
-import { startRetry } from "../src/seats.js";
+import { commandStart, startRetry } from "../src/seats.js";
 import { watchStartMs } from "../src/team.js";
 import { fold, type State } from "../src/state.js";
 
@@ -20,6 +20,8 @@ startRetry.delayMs = 1;
 submitCheck.waitMs = 30;
 submitCheck.pollMs = 5;
 watchStartMs.value = 0;
+commandStart.timeoutMs = 300;
+commandStart.pollMs = 5;
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -77,6 +79,8 @@ export class FakeHerdrCli {
   /** A process other than the shell that Herdr reports in the foreground. */
   stray: string | null = null;
   unreachable = false;
+  /** Launcher commands that start no agent (a missing token, say). */
+  failCommands = new Set<string>();
   /** Status a prompted agent moves to. */
   promptedStatus = "working";
   private n = 1;
@@ -111,7 +115,15 @@ export class FakeHerdrCli {
       return ok({ process_info: { foreground_processes: foreground, shell_pid: 1 } });
     }
     if (group === "pane" && action === "wait-output") return ok({});
-    if (group === "pane" && action === "run") { this.ran.push({ pane: args[2]!, command: args[3]! }); return ok({}); }
+    if (group === "pane" && action === "run") {
+      this.ran.push({ pane: args[2]!, command: args[3]! });
+      // A launcher's own command (claude-as, codex-as ...) brings its agent up, unless told to fail.
+      const word = args[3]!.split(" ")[0]!;
+      const kind = /^claude/.test(word) ? "claude" : /^codex/.test(word) ? "codex" : null;
+      if (kind && !this.failCommands.has(word)) this.agents.set(args[2]!, { status: "idle", kind, name: word });
+      return ok({});
+    }
+    if (group === "pane" && action === "read") return { code: 0, stdout: this.screens.get(args[2]!) ?? "PS> ", stderr: "" };
     if (group === "agent" && action === "start") {
       const pane = flag("--pane");
       if (!this.panes.has(pane)) return fail("pane_not_found");
@@ -173,7 +185,7 @@ export class World {
     const home = await tempDir("slp-home-");
     const repo = await tempRepo();
     await mkdir(dirname(configPath({ SLP_HOME: home })), { recursive: true });
-    await writeFile(configPath({ SLP_HOME: home }), JSON.stringify(defaultConfig("linux")));
+    await writeFile(configPath({ SLP_HOME: home }), JSON.stringify(defaultConfig()));
     return new World(home, repo, new FakeHerdrCli());
   }
 
@@ -217,4 +229,17 @@ export class World {
   async inbox(seat: string): Promise<string[]> {
     return this.cli.promptsTo(await this.pane(seat));
   }
+}
+
+/** The README's "Several accounts" recipe: each machine's own claude-as and codex-as commands. */
+export function accountsConfig(): ReturnType<typeof defaultConfig> {
+  const c = defaultConfig();
+  const as = (agent: "claude" | "codex", acc: string) => ({ agent, command: `${agent}-as ${acc}`, env: {}, prep: {} });
+  c.launchers = { ...c.launchers, "claude-acc1": as("claude", "acc1"), "claude-acc2": as("claude", "acc2"),
+    "codex-acc1": as("codex", "acc1"), "codex-acc2": as("codex", "acc2"), "codex-acc3": as("codex", "acc3") };
+  c.roles.lead.use = ["claude-acc1"];
+  c.roles.reviewer.use = ["claude-acc2"];
+  c.roles.critic.use = ["claude-acc2"];
+  c.roles.peer.use = ["codex-acc1", "codex-acc2", "codex-acc3"];
+  return c;
 }

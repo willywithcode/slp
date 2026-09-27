@@ -271,7 +271,7 @@ describe("tasks", () => {
     const w = await World.create();
     const { writeFile } = await import("node:fs/promises");
     const { defaultConfig } = await import("../src/core/config.js");
-    const config = defaultConfig("linux");
+    const config = defaultConfig();
     config.launchers["codex-b"] = { agent: "codex", env: { CODEX_HOME: "{home}/.codex-b" }, prep: {} };
     config.roles.peer.use = ["codex", "codex-b"];
     await writeFile(join(w.home, "config.json"), JSON.stringify(config));

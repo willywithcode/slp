@@ -8,7 +8,7 @@ import { detectGate, runGate } from "../src/gate.js";
 import { isCatchAll, matches, overlaps } from "../src/globs.js";
 import { agentArgs } from "../src/roles.js";
 import { envCommands, readyProbe, shellFamily } from "../src/shells.js";
-import { tempDir } from "./helpers.js";
+import { accountsConfig, tempDir } from "./helpers.js";
 
 describe("globs", () => {
   it("matches paths", () => {
@@ -62,28 +62,32 @@ describe("config", () => {
   it("writes the defaults on first use and reads them back, BOM or not", async () => {
     const home = await tempDir();
     const env = { SLP_HOME: home };
-    const first = await loadConfig(env, "linux");
+    const first = await loadConfig(env);
     expect(first.roles.supervisor.effort).toBe("xhigh");
     const raw = await readFile(configPath(env), "utf8");
     await writeFile(configPath(env), String.fromCharCode(0xfeff) + raw);
-    expect((await loadConfig(env, "linux")).roles.peer.defaultPreset).toBe("sol");
+    expect((await loadConfig(env)).roles.peer.defaultPreset).toBe("sol");
     await writeFile(configPath(env), "{");
     await expect(loadConfig(env)).rejects.toThrow(/not valid JSON/);
   });
 
-  it("matches the owner's accounts on Windows (ADR 0011)", () => {
-    const c = defaultConfig("win32");
+  it("ships neutral defaults, the same on every platform", () => {
+    const c = defaultConfig();
+    expect(Object.keys(c.launchers).sort()).toEqual(["agy", "claude", "codex"]);
     expect(c.roles.supervisor).toMatchObject({ use: ["claude"], model: "claude-opus-5-5[1m]", effort: "xhigh" });
-    expect(c.roles.lead).toMatchObject({ use: ["claude-acc1"], effort: "high" });
-    expect(c.roles.reviewer.use).toEqual(["claude-acc2"]);
-    expect(c.roles.peer.use).toEqual(["codex-acc1", "codex-acc2", "codex-acc3"]);
-    // slp only names the secret file; the pane's own shell decrypts it.
-    expect(c.launchers["claude-acc1"]!.prep.powershell).toContain("claude-acc1.txt");
-    expect(JSON.stringify(c)).not.toMatch(/sk-|token=/i);
+    expect(JSON.stringify(c)).not.toMatch(/secrets|CODEX_HOME|OAUTH/i);
+  });
+
+  it("takes the README's several-accounts recipe (ADR 0011)", () => {
+    const c = parseConfig(accountsConfig());
+    // Only the machine's own commands are named; slp never sees a token.
+    expect(c.launchers["claude-acc1"]).toMatchObject({ agent: "claude", command: "claude-as acc1" });
+    expect(c.launchers["codex-acc3"]).toMatchObject({ agent: "codex", command: "codex-as acc3" });
+    expect(JSON.stringify(c)).not.toMatch(/secrets|OAUTH|sk-[A-Za-z0-9]/);
   });
 
   it("rotates launchers and applies presets", () => {
-    const c = defaultConfig("win32");
+    const c = accountsConfig();
     expect(chooseSeat(c, "peer", 0).launcherName).toBe("codex-acc1");
     expect(chooseSeat(c, "peer", 4).launcherName).toBe("codex-acc2");
     expect(chooseSeat(c, "peer", 1, "luna")).toMatchObject({ launcherName: "codex-acc2", model: "gpt-6-luna" });
@@ -92,7 +96,7 @@ describe("config", () => {
   });
 
   it("rejects unknown launchers", () => {
-    const c = defaultConfig("linux");
+    const c = defaultConfig();
     c.roles.lead.use = ["ghost"];
     expect(() => parseConfig(c)).toThrow(/unknown launcher "ghost"/);
   });
@@ -153,3 +157,13 @@ describe("text input", () => {
 
 // Keep mkdir referenced for platforms where tempDir needs a nested directory.
 void mkdir;
+
+describe("launch command lines", () => {
+  it("quotes each argument for the pane's shell", async () => {
+    const { commandLine } = await import("../src/shells.js");
+    expect(commandLine("sh", "claude-as acc1", ["--model", "claude-opus-5-5[1m]", "it's"])).toBe("claude-as acc1 '--model' 'claude-opus-5-5[1m]' 'it'\''s'");
+    expect(commandLine("powershell", "codex-as acc2", ["-c", "model_reasoning_effort=high", "it's"])).toBe("codex-as acc2 '-c' 'model_reasoning_effort=high' 'it''s'");
+    expect(commandLine("cmd", "claude", ["--model", "x"])).toBe('claude "--model" "x"');
+    expect(() => commandLine("cmd", "claude", ["a&b"])).toThrow(/safely/);
+  });
+});
