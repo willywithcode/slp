@@ -26,7 +26,11 @@ through Herdr.
 - **Identity and state** come from Herdr: a seat is its pane
   (`HERDR_PANE_ID`, `HERDR_WORKSPACE_ID`); working, idle, blocked and gone
   come from Herdr's agent status and events.
-- **Layout**: one Herdr workspace per project, one tab per lane.
+- **Layout** (owner, 2026-09-27): seats open in the Human's own workspace
+  (the one `slp start` runs in), never a new workspace, so the whole team is
+  in view. Tab 1 holds the Human's shell, the Supervisor and the watcher;
+  each lane gets its own tab named after it (Lead, Peers, Reviewer), so
+  panes stay readable. Herdr's agent sidebar shows every seat's state.
 
 ## Consequences
 

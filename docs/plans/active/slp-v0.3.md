@@ -50,7 +50,8 @@ cross-machine sharing of state; agent kinds other than Claude Code and Codex
 
 - **Project**: one per repository, state in `~/.slp/projects/<id>/`
   (`project.json`, `CONTEXT.md`, event ledger, seats, slots, assessments).
-  One Herdr workspace per project; one tab per lane.
+  Seats open in the Human's own Herdr workspace: tab 1 for the Human,
+  Supervisor and watcher; one tab per lane (ADR 0012).
 - **Ledger**: the existing locked, append-only event log, extended with lane,
   task, ask, letter, incident and assessment events; state is a fold.
 - **Roles as data** (`roles.json`): per role its capabilities, allowed
@@ -153,6 +154,7 @@ actionable findings, docs and ADRs current.
   moves on usage limits (ADR 0011).
 - 2026-09-27: Owner rule: all communication between roles goes through
   Herdr; seats are opened with `herdr agent start` (ADR 0012).
+- 2026-09-27: Seats open in the Human's workspace, one tab per lane.
 - 2026-09-27: The local folder is still named `spl` (held open by another
   process); rename when free.
 
