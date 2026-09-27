@@ -161,7 +161,7 @@ void mkdir;
 describe("launch command lines", () => {
   it("quotes each argument for the pane's shell", async () => {
     const { commandLine } = await import("../src/shells.js");
-    expect(commandLine("sh", "claude-as acc1", ["--model", "claude-opus-5-5[1m]", "it's"])).toBe("claude-as acc1 '--model' 'claude-opus-5-5[1m]' 'it'\''s'");
+    expect(commandLine("sh", "claude-as acc1", ["--model", "claude-opus-5-5[1m]", "it's"])).toBe(String.raw`claude-as acc1 '--model' 'claude-opus-5-5[1m]' 'it'\''s'`);
     expect(commandLine("powershell", "codex-as acc2", ["-c", "model_reasoning_effort=high", "it's"])).toBe("codex-as acc2 '-c' 'model_reasoning_effort=high' 'it''s'");
     expect(commandLine("cmd", "claude", ["--model", "x"])).toBe('claude "--model" "x"');
     expect(() => commandLine("cmd", "claude", ["a&b"])).toThrow(/safely/);
