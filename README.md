@@ -36,9 +36,13 @@ by live Herdr runs on Windows with Claude Code and Codex seats.
 The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.3.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.4.tar.gz
 slp help
 ```
+
+Later, `slp update` installs the latest release the same way (`--dry-run`
+only reports; a clone linked with `npm link` is fast-forwarded instead).
+Restart running teams afterwards (`slp stop`, `slp start`); slp lists them.
 
 This puts `slp` on `PATH` (`slp.cmd` on Windows); the agents run it from their
 panes, so it must be on `PATH` inside Herdr. To work on slp itself: clone,
@@ -83,6 +87,7 @@ Your commands:
 | `slp redeliver <seq> [--force]` | send a letter again |
 | `slp watch` | run a watcher yourself (normally `slp start` does) |
 | `slp config` | path of the accounts, models, watch and Jev settings |
+| `slp update [--dry-run]` | install the latest slp release |
 | `slp stop [--force]` | close every seat |
 
 Seats see their own verbs with `slp guide`.

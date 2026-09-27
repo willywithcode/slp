@@ -20,6 +20,7 @@ import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
 import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask } from "./tasks.js";
 import { closeLane, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
+import { update } from "./update.js";
 import { Watcher } from "./watcher.js";
 const USAGE = `slp: a Supervisor, Leads and Peers working on your repository through Herdr
 
@@ -33,6 +34,7 @@ The Human (in a Herdr pane, inside the repository):
   slp config                where the accounts and models are configured
   slp incidents             what the watch found; mark one: slp ack <id> useful|noise|unknown
   slp calibrate [--dry-run] set Jev's thresholds from those marks
+  slp update [--dry-run]    install the latest slp (or --version v0.3.3)
 
 Seats run \`slp guide\` for their own verbs. State lives in ~/.slp (SLP_HOME).`;
 const OPTIONS = {
@@ -45,12 +47,12 @@ const OPTIONS = {
     parallel: { type: "boolean" }, task: { type: "string" }, lane: { type: "boolean" }, focus: { type: "string" },
     check: { type: "string", multiple: true }, left: { type: "string" }, finding: { type: "string", multiple: true },
     default: { type: "string" }, force: { type: "boolean" }, project: { type: "string" }, once: { type: "boolean" },
-    interval: { type: "string" }, file: { type: "string" }, skill: { type: "string", multiple: true }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
+    interval: { type: "string" }, file: { type: "string" }, skill: { type: "string", multiple: true }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" }, version: { type: "string" },
 };
 export class UsageError extends Error {
 }
 /** Commands only the Human runs, never a seat. */
-const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate"]);
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update"]);
 /** Seat verbs the Human may run too. */
 const HUMAN_TOO = new Set(["incidents", "ack"]);
 /** Verbs only a seat runs; everything else is the Human's. */
@@ -143,6 +145,10 @@ export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
             await redeliver(deps, project.id, me ? me.seat.name : null, seq, values.force === true);
             return 0;
         }
+        case "update":
+            arity(0);
+            await update(deps, { check: values["dry-run"] === true, version: values.version });
+            return 0;
         case "config":
             arity(0);
             await loadConfig(deps.env);
