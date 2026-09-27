@@ -60,3 +60,12 @@ export function pathPrepend(family, dir) {
         throw new SlpError(`Cannot put ${dir} on PATH safely in cmd.exe`);
     return `set "PATH=${dir};%PATH%"`;
 }
+/** A command followed by arguments, each quoted for the given shell. */
+export function commandLine(family, command, args) {
+    const quote = family === "powershell" ? quotePs : family === "sh" ? quoteSh : (v) => {
+        if (/["^&|<>%]/.test(v))
+            throw new SlpError(`Cannot pass ${v} safely in cmd.exe`);
+        return `"${v}"`;
+    };
+    return [command, ...args.map(quote)].join(" ");
+}

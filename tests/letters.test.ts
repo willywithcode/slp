@@ -7,7 +7,7 @@ import { Herdr } from "../src/herdr.js";
 import { INLINE_LIMIT, watchLockPath } from "../src/letters.js";
 import { startRetry } from "../src/seats.js";
 import { Watcher, watchTiming } from "../src/watcher.js";
-import { World } from "./helpers.js";
+import { accountsConfig, World } from "./helpers.js";
 
 const LANE = ["open-lane", "--title", "Greeting", "--outcome", "greets", "--accept", "a", "--write", "src/**"];
 
@@ -207,7 +207,7 @@ describe("seats", () => {
 
   it("replaces a pane that stays busy and prepares the new one too", async () => {
     const w = await World.create();
-    const config = defaultConfig("linux");
+    const config = defaultConfig();
     config.launchers.claude!.env = { ANTHROPIC_API_KEY: null };
     await writeFile(join(w.home, "config.json"), JSON.stringify(config));
     const original = w.cli.exec;
@@ -225,19 +225,47 @@ describe("seats", () => {
     expect(w.cli.ran.filter((r) => r.command.includes("unset ANTHROPIC_API_KEY")).map((r) => r.pane)).toContain(sup);
   });
 
-  it("types a launcher's preparation into a PowerShell pane (ADR 0011)", async () => {
+  it("starts a seat with the machine's own command, arguments quoted for its shell (ADR 0011)", async () => {
     const w = await World.create();
-    await writeFile(join(w.home, "config.json"), JSON.stringify(defaultConfig("win32")));
+    await writeFile(join(w.home, "config.json"), JSON.stringify(accountsConfig()));
     w.cli.shell = "pwsh.exe";
     await w.slp(["start"]);
     w.cli.idleAll();
     await w.as("sup", LANE);
     const lead = await w.pane("L1");
-    const prep = w.cli.ran.find((r) => r.pane === lead)!.command;
-    expect(prep).toContain("Remove-Item Env:ANTHROPIC_API_KEY");
-    expect(prep).toContain("claude-acc1.txt");
-    expect(prep).toContain("Write-Output ('slp-ready-' + '");
+    const typed = w.cli.ran.filter((r) => r.pane === lead).map((r) => r.command);
+    expect(typed[0]).toContain("Write-Output ('slp-ready-' + '");
+    expect(typed[1]!.startsWith("claude-as acc1 '--model' 'claude-opus-5-5[1m]' '--effort' 'high' '--session-id' '")).toBe(true);
+    expect(typed[1]!.endsWith("claude-lead.json'")).toBe(true);
+    // No `herdr agent start` for it: Herdr recognised the agent the command started.
+    expect(w.cli.calls.some((c) => c[0] === "agent" && c[1] === "start" && c.includes(lead))).toBe(false);
     expect((await w.state()).seats.get("L1")!.launcher).toBe("claude-acc1");
+    expect((await w.inbox("L1"))[0]).toContain("[SLP DIRECTIVE");
+  });
+
+  it("reports what the pane shows when the command starts no agent", async () => {
+    const w = await World.create();
+    await writeFile(join(w.home, "config.json"), JSON.stringify(accountsConfig()));
+    w.cli.failCommands.add("claude-as");
+    await w.slp(["start"]);
+    w.cli.idleAll();
+    await expect(w.as("sup", LANE)).rejects.toThrow(/No agent started in pane .* from: claude-as acc1/);
+  });
+
+  it("still takes a launcher's environment and preparation (older configs)", async () => {
+    const w = await World.create();
+    const config = accountsConfig();
+    config.launchers["claude-acc1"] = { agent: "claude", env: { ANTHROPIC_API_KEY: null }, prep: { powershell: "$env:X = 'from-prep'" } };
+    await writeFile(join(w.home, "config.json"), JSON.stringify(config));
+    w.cli.shell = "pwsh.exe";
+    await w.slp(["start"]);
+    w.cli.idleAll();
+    await w.as("sup", LANE);
+    const lead = await w.pane("L1");
+    const first = w.cli.ran.find((r) => r.pane === lead)!.command;
+    expect(first).toContain("Remove-Item Env:ANTHROPIC_API_KEY");
+    expect(first).toContain("$env:X = 'from-prep'");
+    expect(w.cli.calls.some((c) => c[0] === "agent" && c[1] === "start" && c.includes(lead))).toBe(true);
   });
 
   it("knows a seat only by its pane and workspace", async () => {

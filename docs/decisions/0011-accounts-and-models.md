@@ -63,3 +63,14 @@ Tradeoffs:
   token (length checked, value never shown).
 - agy has no documented multi-account mechanism and no narrow permission
   flag yet; it is used with one account.
+
+## Update 2026-09-28
+
+- The defaults are neutral: plain `claude`, `codex` and `agy`, the same on
+  every platform. The owner's accounts are no longer built in.
+- A launcher may name a `command` of the owner's own (e.g. `claude-as acc1`,
+  `codex-as acc2`) that picks the account: slp types it with its arguments
+  (quoted for the pane's shell) and waits until Herdr recognises the agent it
+  started (verified live with the owner's PowerShell `claude-as` and
+  `codex-as`). Tokens stay entirely in those commands, so one config serves
+  every machine that defines them. `env` and `prep` remain accepted.

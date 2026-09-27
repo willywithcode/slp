@@ -29,7 +29,7 @@ function fakeJev(pick: Pick = () => undefined, calls: { url: string; body: any }
 }
 
 async function configure(w: World, change: (c: Config) => void): Promise<void> {
-  const c = defaultConfig("linux");
+  const c = defaultConfig();
   change(c);
   await writeFile(join(w.home, "config.json"), JSON.stringify(c));
 }
@@ -72,7 +72,7 @@ describe("decision points", () => {
     const w = await World.create();
     await w.slp(["start"]);
     const deps = { ...w.deps(null), env: { ...w.deps(null).env, JEV_API_KEY: "k" }, fetch: fakeJev(() => ({ choice: "yes", confidence: 0.9 })) };
-    const config = defaultConfig("linux");
+    const config = defaultConfig();
     const r1 = await consult(deps, w.project, config, "turn", "s1", {}, SENSOR);
     expect(r1?.trusted("goal_drift", "yes")).toBe(false); // shadow
     expect(await consult(deps, w.project, config, "turn", "s1", {}, SENSOR)).toBeNull(); // asked already

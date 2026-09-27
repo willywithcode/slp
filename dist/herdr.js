@@ -75,6 +75,10 @@ export class Herdr {
     async workspaceClose(workspaceId) {
         await this.call(["workspace", "close", workspaceId]);
     }
+    /** The last lines a pane shows (plain text). */
+    async paneRead(paneId, lines) {
+        return this.run(["pane", "read", paneId, "--lines", String(lines)]);
+    }
     /** Type a command into a pane's shell and press Enter. */
     async paneRun(paneId, command) {
         await this.call(["pane", "run", paneId, command]);
