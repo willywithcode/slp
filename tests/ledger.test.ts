@@ -2,18 +2,19 @@ import { appendFile, mkdir, readFile, rm, utimes, writeFile } from "node:fs/prom
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acquireLock, appendEvent, eventsPath, lockTiming, nextCaseId, readEvents, releaseLock } from "../src/log.js";
-import { tempHome } from "./helpers.js";
+import { append as appendEvent, ledgerPath as eventsPath, nextId, readLedger as readEvents } from "../src/core/ledger.js";
+import { acquireLock, lockTiming, releaseLock } from "../src/core/lock.js";
+import { tempDir as tempHome } from "./helpers.js";
 
-/** An env whose room directory exists, as `slp up` would leave it. */
+/** An env whose project directory exists, as `slp start` would leave it. */
 async function roomEnv() {
   const home = await tempHome();
-  await mkdir(join(home, "rooms", "demo"), { recursive: true });
+  await mkdir(join(home, "projects", "demo"), { recursive: true });
   return { SLP_HOME: home };
 }
 
-const draft = (text: string) => (events: unknown[]) =>
-  ({ kind: "brief" as const, case: `c${events.length + 1}`, from: "lead", to: "p1", text });
+const draft = (text: string) => () =>
+  ({ kind: "letter" as const, letter: "MESSAGE" as const, from: "sup", to: "L1", text, lane: null, task: null });
 
 describe("event log", () => {
   it("assigns gap-free sequence numbers under concurrent appends", async () => {
@@ -21,13 +22,13 @@ describe("event log", () => {
     await Promise.all(Array.from({ length: 25 }, (_, i) => appendEvent(env, "demo", draft(`m${i}`))));
     const events = await readEvents(env, "demo");
     expect(events.map((e) => e.seq)).toEqual(Array.from({ length: 25 }, (_, i) => i + 1));
-    expect(new Set(events.map((e) => (e.kind === "brief" ? e.case : ""))).size).toBe(25);
+    expect(new Set(events.map((e) => (e.kind === "letter" ? e.text : ""))).size).toBe(25);
   });
 
   it("skips a torn trailing line instead of failing", async () => {
     const env = await roomEnv();
     await appendEvent(env, "demo", draft("ok"));
-    await appendFile(eventsPath(env, "demo"), '{"kind":"brief","seq":2,"ts":"x","ca');
+    await appendFile(eventsPath(env, "demo"), '{"kind":"letter","seq":2,"ts":"x","le');
     expect((await readEvents(env, "demo")).map((e) => e.seq)).toEqual([1]);
   });
 
@@ -38,13 +39,21 @@ describe("event log", () => {
     await appendEvent(env, "demo", draft("after")); // lock was released
   });
 
-  it("numbers cases from briefs only", () => {
-    expect(nextCaseId([])).toBe("c1");
+  it("numbers ids by event kind", async () => {
+    const env = await roomEnv();
+    await appendEvent(env, "demo", draft("x"));
+    expect(nextId(await readEvents(env, "demo"), "ask", "A")).toBe("A1");
+    expect(nextId(await readEvents(env, "demo"), "letter", "M")).toBe("M2");
+  });
+
+  it("refuses to append to a project that does not exist", async () => {
+    const home = await tempHome();
+    await expect(appendEvent({ SLP_HOME: home }, "nope", draft("x"))).rejects.toThrow(/does not exist/);
   });
 });
 
-describe("room lock", () => {
-  const lockDir = (home: string) => join(home, "rooms", "demo", "events.lock");
+describe("ledger lock", () => {
+  const lockDir = (home: string) => join(home, "projects", "demo", "ledger.lock");
   async function plantLock(home: string, owner: object | null, ageMs = 0) {
     await mkdir(lockDir(home), { recursive: true });
     if (owner) await writeFile(join(lockDir(home), "owner.json"), JSON.stringify(owner));
@@ -80,29 +89,29 @@ describe("room lock", () => {
   it("keeps later events after a torn trailing line", async () => {
     const env = await roomEnv();
     await appendEvent(env, "demo", draft("one"));
-    await appendFile(eventsPath(env, "demo"), '{"kind":"brief","seq":2,"ts":"x","ca');
+    await appendFile(eventsPath(env, "demo"), '{"kind":"letter","seq":2,"ts":"x","le');
     await appendEvent(env, "demo", draft("two"));
     await appendEvent(env, "demo", draft("three"));
-    expect((await readEvents(env, "demo")).map((e) => e.kind === "brief" && e.text)).toEqual(["one", "two", "three"]);
+    expect((await readEvents(env, "demo")).map((e) => e.kind === "letter" && e.text)).toEqual(["one", "two", "three"]);
   });
 });
 
 describe("lock release and guard", () => {
-  it("releasing a lock whose room was just archived is not an error", async () => {
+  it("releasing a lock whose project was just removed is not an error", async () => {
     const env = await roomEnv();
-    const lock = join(env.SLP_HOME, "rooms", "demo", "events.lock");
+    const lock = join(env.SLP_HOME, "projects", "demo", "ledger.lock");
     const token = await acquireLock(lock);
-    await rm(join(env.SLP_HOME, "rooms", "demo"), { recursive: true });
+    await rm(join(env.SLP_HOME, "projects", "demo"), { recursive: true });
     await expect(releaseLock(lock, token)).resolves.toBeUndefined();
   });
 
   it("clears a reclaim guard left by a dead process without waiting for it to age", async () => {
     const env = await roomEnv();
-    const dir = join(env.SLP_HOME, "rooms", "demo");
-    await mkdir(join(dir, "events.lock"));
-    await writeFile(join(dir, "events.lock", "owner.json"), JSON.stringify({ token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() }));
-    await mkdir(join(dir, "events.lock.reclaim"));
-    await writeFile(join(dir, "events.lock.reclaim", "owner.json"), JSON.stringify({ token: "g", pid: 2 ** 22 + 12346, host: hostname(), at: Date.now() }));
+    const dir = join(env.SLP_HOME, "projects", "demo");
+    await mkdir(join(dir, "ledger.lock"));
+    await writeFile(join(dir, "ledger.lock", "owner.json"), JSON.stringify({ token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() }));
+    await mkdir(join(dir, "ledger.lock.reclaim"));
+    await writeFile(join(dir, "ledger.lock.reclaim", "owner.json"), JSON.stringify({ token: "g", pid: 2 ** 22 + 12346, host: hostname(), at: Date.now() }));
     lockTiming.timeoutMs = 2_000;
     try {
       await appendEvent(env, "demo", draft("after dead reclaimer"));
@@ -114,19 +123,19 @@ describe("lock release and guard", () => {
 
   it("never removes a reclaim guard held by a live process, however old", async () => {
     const env = await roomEnv();
-    const dir = join(env.SLP_HOME, "rooms", "demo");
-    await mkdir(join(dir, "events.lock"));
-    await writeFile(join(dir, "events.lock", "owner.json"), JSON.stringify({ token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() }));
-    await mkdir(join(dir, "events.lock.reclaim"));
-    await writeFile(join(dir, "events.lock.reclaim", "owner.json"), JSON.stringify({ token: "live", pid: process.pid, host: hostname(), at: Date.now() - 3_600_000 }));
+    const dir = join(env.SLP_HOME, "projects", "demo");
+    await mkdir(join(dir, "ledger.lock"));
+    await writeFile(join(dir, "ledger.lock", "owner.json"), JSON.stringify({ token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() }));
+    await mkdir(join(dir, "ledger.lock.reclaim"));
+    await writeFile(join(dir, "ledger.lock.reclaim", "owner.json"), JSON.stringify({ token: "live", pid: process.pid, host: hostname(), at: Date.now() - 3_600_000 }));
     const old = new Date(Date.now() - 3_600_000);
-    await utimes(join(dir, "events.lock.reclaim"), old, old);
+    await utimes(join(dir, "ledger.lock.reclaim"), old, old);
     lockTiming.timeoutMs = 300;
     try {
       await expect(appendEvent(env, "demo", draft("x"))).rejects.toThrow(/Timed out/);
     } finally {
       lockTiming.timeoutMs = 10_000;
     }
-    expect(await readFile(join(dir, "events.lock.reclaim", "owner.json"), "utf8")).toContain('"live"');
+    expect(await readFile(join(dir, "ledger.lock.reclaim", "owner.json"), "utf8")).toContain('"live"');
   });
 });

@@ -47,6 +47,27 @@ export class Herdr {
     return required(r.pane?.pane_id, "pane.pane_id");
   }
 
+  async tabCreate(opts: { workspaceId: string; cwd: string; label: string; env: Record<string, string> }): Promise<{ tabId: string; rootPaneId: string }> {
+    const r = await this.call(["tab", "create", "--workspace", opts.workspaceId, "--cwd", opts.cwd, "--label", opts.label, ...envArgs(opts.env), "--no-focus"]);
+    return { tabId: required(r.tab?.tab_id, "tab.tab_id"), rootPaneId: required(r.root_pane?.pane_id, "root_pane.pane_id") };
+  }
+
+  async tabClose(tabId: string): Promise<void> {
+    await this.call(["tab", "close", tabId]);
+  }
+
+  /** Names of the processes in the foreground of a pane (its shell, or what runs in it). */
+  async paneForeground(paneId: string): Promise<string[]> {
+    const r = await this.call(["pane", "process-info", "--pane", paneId]);
+    const procs: unknown = r.process_info?.foreground_processes;
+    return Array.isArray(procs) ? procs.flatMap((p: Record<string, unknown>) => (typeof p?.name === "string" ? [p.name] : [])) : [];
+  }
+
+  /** Wait until `match` appears in the pane's output. */
+  async paneWaitOutput(paneId: string, match: string, timeoutMs: number): Promise<void> {
+    await this.call(["pane", "wait-output", paneId, "--match", match, "--timeout", String(timeoutMs)]);
+  }
+
   async paneClose(paneId: string): Promise<void> {
     await this.call(["pane", "close", paneId]);
   }

@@ -1,45 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { z } from "zod";
-import { loadRoom, RoomGoneError, roomDir, SplError, type Env, type Room } from "./room.js";
-
-const base = { seq: z.number().int().positive(), ts: z.string() };
-const message = { ...base, case: z.string(), from: z.string(), to: z.string(), text: z.string() };
-export const EventSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("brief"), ...message }),
-  z.object({ kind: z.literal("handback"), ...message }),
-  // `closes`: the Lead accepted and closed the case; the recipient owes nothing.
-  z.object({ kind: z.literal("reply"), ...message, closes: z.literal(true).optional() }),
-  // Outcome of handing a message event (`ref`) to Herdr. A message event
-  // without a successful delivery was recorded but never reached its target.
-  z.object({
-    kind: z.literal("delivery"), ...base, ref: z.number().int().positive(), ok: z.boolean(), error: z.string().nullable(),
-    // Alerts only: which channel this attempt used.
-    channel: z.enum(["prompt", "notification"]).optional(),
-    // Messages only. "queued": the sender could not reach Herdr (e.g. an agent
-    // sandbox) and left it for the room watcher; "relaying": the watcher
-    // claimed it and is delivering it now.
-    stage: z.enum(["queued", "relaying"]).optional(),
-  }),
-  // Raised by `slp watch`. `key` identifies the trigger so it fires once.
-  z.object({
-    kind: z.literal("alert"), ...base, key: z.string(), rule: z.string(),
-    case: z.string().nullable(), member: z.string().nullable(), text: z.string(),
-  }),
-  // A Jev judgment of a case's communication up to message `upTo` (ADR 0005:
-  // only with --jev). `answers` is null when the request failed.
-  z.object({
-    kind: z.literal("assessment"), ...base, case: z.string(), upTo: z.number().int().positive(),
-    mode: z.enum(["shadow", "alert"]), verdict: z.enum(["handled", "drift", "unknown"]),
-    answers: z.record(z.string(), z.object({ choice: z.string(), confidence: z.number() })).nullable(),
-  }),
-]);
-export type SplEvent = z.infer<typeof EventSchema>;
-export type MessageEvent = Extract<SplEvent, { kind: "brief" | "handback" | "reply" }>;
-export const isMessage = (e: SplEvent): e is MessageEvent => e.kind === "brief" || e.kind === "handback" || e.kind === "reply";
-type Draft = SplEvent extends infer E ? E extends SplEvent ? Omit<E, "seq" | "ts"> : never : never;
+import { SlpError } from "./errors.js";
 
 /** Lock timing; mutable only so tests can shorten waits. */
 export const lockTiming = {
@@ -50,82 +13,6 @@ export const lockTiming = {
   /** A lock owned by another host, whose pid cannot be checked. */
   foreignStaleMs: 5 * 60_000,
 };
-
-export function eventsPath(env: Env, room: string): string {
-  return join(roomDir(env, room), "events.jsonl");
-}
-
-export async function readEvents(env: Env, room: string): Promise<SplEvent[]> {
-  return parseEvents(await readRaw(eventsPath(env, room)));
-}
-
-async function readRaw(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-}
-
-function parseEvents(raw: string): SplEvent[] {
-  const events: SplEvent[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    // A torn line (crash mid-append) is skipped rather than fatal.
-    const parsed = EventSchema.safeParse(safeJson(line));
-    if (parsed.success) events.push(parsed.data);
-  }
-  return events;
-}
-
-function safeJson(line: string): unknown {
-  try { return JSON.parse(line); } catch { return null; }
-}
-
-/**
- * Append one event under an exclusive room lock. `build` sees the current
- * events, so validation and sequence/case numbering are race-free across
- * the several agent processes that share a room. With `expect`, the room on
- * disk must still be that instance (same workspace and creation time), checked
- * under the lock, so a writer holding an archived room never writes into a
- * newer room that reused the name.
- */
-export async function appendEvent<E extends Draft>(
-  env: Env, room: string, build: (events: SplEvent[]) => E,
-  expect?: Pick<Room, "workspaceId" | "createdAt">,
-): Promise<Extract<SplEvent, { kind: E["kind"] }>> {
-  const dir = roomDir(env, room);
-  // Never recreate a room: after `slp down` archived it, a late writer (e.g. a
-  // watcher still running) must fail rather than start a new, split log.
-  const gone = () => new RoomGoneError(`Room "${room}" does not exist (it may have been archived by \`slp down\`)`);
-  if (!(await stat(dir).then((s) => s.isDirectory(), () => false))) throw gone();
-  const lock = join(dir, "events.lock");
-  const token = await acquireLock(lock).catch((error: unknown) => {
-    throw (error as NodeJS.ErrnoException).code === "ENOENT" ? gone() : error;
-  });
-  try {
-    if (expect) {
-      const current = await loadRoom(env, room);
-      if (!current) throw gone();
-      if (current.workspaceId !== expect.workspaceId || current.createdAt !== expect.createdAt) {
-        throw new RoomGoneError(`Room "${room}" was replaced by a newer room with the same name`);
-      }
-    }
-    const path = eventsPath(env, room);
-    const raw = await readRaw(path);
-    const events = parseEvents(raw);
-    const draft = build(events);
-    const seq = (events.at(-1)?.seq ?? 0) + 1;
-    const event = EventSchema.parse({ ...draft, seq, ts: new Date().toISOString() });
-    // Terminate a torn tail so it cannot swallow this event.
-    const separator = raw && !raw.endsWith("\n") ? "\n" : "";
-    await appendFile(path, `${separator}${JSON.stringify(event)}\n`, "utf8");
-    return event as Extract<SplEvent, { kind: E["kind"] }>;
-  } finally {
-    await releaseLock(lock, token);
-  }
-}
 
 export interface Owner { token: string; pid: number; host: string; at: number }
 
@@ -149,8 +36,8 @@ export async function acquireLock(
     if (await isStale(lock, opts.reclaimForeign) && await reclaim(lock, opts.reclaimForeign)) continue;
     if (Date.now() >= deadline) {
       const owner = await readOwner(lock);
-      throw new SplError(opts.busy?.(owner) ??
-        `Timed out waiting for room lock ${lock}` + (owner ? ` (held by pid ${owner.pid} on ${owner.host})` : ""));
+      throw new SlpError(opts.busy?.(owner) ??
+        `Timed out waiting for lock ${lock}` + (owner ? ` (held by pid ${owner.pid} on ${owner.host})` : ""));
     }
     await new Promise((resolve) => setTimeout(resolve, lockTiming.retryMs));
   }
@@ -164,7 +51,7 @@ export async function acquireLock(
  */
 export async function releaseLock(lock: string, token: string): Promise<void> {
   const guard = await takeGuard(`${lock}.reclaim`, 5_000);
-  if (guard === "gone" || guard === "busy") return; // room archived, or leave it for reclamation
+  if (guard === "gone" || guard === "busy") return; // directory gone, or leave it for reclamation
   try {
     await removeOwned(lock, token);
   } finally {
@@ -265,8 +152,4 @@ function isAlive(pid: number): boolean {
     // EPERM: the process exists but belongs to someone else.
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-}
-
-export function nextCaseId(events: readonly SplEvent[]): string {
-  return `c${events.filter((e) => e.kind === "brief").length + 1}`;
 }

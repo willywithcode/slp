@@ -1,222 +1,142 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
-import { foldCases, type CaseView } from "./cases.js";
-import { describe, handToAgent, relay, type Deps } from "./commands.js";
-import { decision, type Evaluate, type Evidence } from "./jev.js";
-import { appendEvent, readEvents, type SplEvent } from "./log.js";
-import { loadRoom, RoomGoneError, roomDir, writeAtomic, type Room } from "./room.js";
-import { evaluate, type Alert, type Observation, type WatchConfig } from "./watch.js";
+import type { Deps } from "./core/deps.js";
+import { GoneError } from "./core/errors.js";
+import { append, readLedger, type SlpEvent } from "./core/ledger.js";
+import { loadProject, type Project } from "./core/project.js";
+import { pendingRequests, runRequest } from "./land.js";
+import { describe, pump, sendLetter } from "./letters.js";
+import { closeSeat } from "./seats.js";
+import { fold, liveSeats, superiorOf, type Seat, type State } from "./state.js";
 
-const ObservationSchema = z.object({
-  status: z.enum(["idle", "done", "working", "blocked", "unknown", "gone"]),
-  stateChangeSeq: z.number().nullable(),
-  since: z.number(),
-});
-const StateSchema = z.record(z.string(), ObservationSchema);
-const READY = new Set<Observation["status"]>(["idle", "done"]);
+// The watcher (ADR 0009): code, not a seat. It relays waiting letters, runs
+// gates and landings, and keeps the team moving with a few plain rules.
+// Phase 4 adds transcript facts and incidents; Jev (ADR 0013) is optional.
 
-/** Delivery rounds per alert before giving up (each round tries every channel). */
-export const MAX_ALERT_ROUNDS = 5;
-/** Jev requests per pass, so one pass stays short (each may take up to 15 s). */
-export const MAX_ASSESSMENTS_PER_PASS = 3;
+export const watchTiming = {
+  /** A seat stuck on a prompt in its pane this long is reported. */
+  blockedMs: 3 * 60_000,
+  /** An unanswered ask is reminded after this long, then as often again. */
+  askReminderMs: 10 * 60_000,
+  askReminders: 3,
+  /** Ticks a live seat's pane may be missing from Herdr before it counts as gone. */
+  goneTicks: 3,
+};
 
-type AlertEvent = Extract<SplEvent, { kind: "alert" }>;
-type AssessmentEvent = Extract<SplEvent, { kind: "assessment" }>;
+export class Watcher {
+  private inflight: Promise<void> | null = null;
+  private readonly blockedSince = new Map<string, number>();
+  private readonly blockedTold = new Set<string>();
+  private readonly missing = new Map<string, number>();
 
-export interface JevOptions { mode: "off" | "shadow" | "alert"; evaluate: Evaluate; threshold: number }
+  constructor(private readonly deps: Deps, private readonly projectId: string) {}
 
-/**
- * One watcher pass: observe Herdr, persist observations (so durations survive
- * restarts and `--once` runs), record new alerts, deliver every alert no
- * channel has delivered yet, and only then spend time on Jev. Recording before
- * delivering means a crash or a Herdr outage delays an alert instead of losing it.
- */
-export async function watchTick(deps: Deps, room: Room, config: WatchConfig, jev?: JevOptions): Promise<AlertEvent[]> {
-  const current = await loadRoom(deps.env, room.name);
-  if (!current) throw new RoomGoneError(`Room "${room.name}" does not exist (it may have been archived by \`slp down\`)`);
-  if (current.workspaceId !== room.workspaceId || current.createdAt !== room.createdAt) {
-    throw new RoomGoneError(`Room "${room.name}" was replaced by a newer room with the same name`);
-  }
-  // Deliver messages that senders inside agent sandboxes could only queue.
-  for (const view of foldCases(await readEvents(deps.env, room.name)).values()) {
-    for (const seq of view.queued) await relay(deps, room, view.messages.find((m) => m.seq === seq)!);
-  }
-  const now = deps.now?.() ?? Date.now();
-  const observed = await observe(deps, room, now);
+  private now(): number { return this.deps.now?.() ?? Date.now(); }
 
-  const raised: AlertEvent[] = [];
-  for (const alert of evaluate({ room, events: await readEvents(deps.env, room.name), observed, now }, config)) {
-    const event = await recordAlert(deps, room, alert,
-      (current) => evaluate({ room, events: current, observed, now }, config).some((a) => a.key === alert.key));
-    if (event) raised.push(event);
-  }
-  await deliverPending(deps, room);
-
-  if (jev && jev.mode !== "off") {
-    raised.push(...await assess(deps, room, config, jev, now));
-    await deliverPending(deps, room);
-  }
-  return raised;
-}
-
-class Duplicate extends Error {}
-
-/**
- * Append an alert unless its key is already recorded or `stillValid` rejects
- * the current log (both checked under the log lock).
- */
-async function recordAlert(deps: Deps, room: Room, alert: Alert, stillValid?: (events: SplEvent[]) => boolean): Promise<AlertEvent | null> {
-  const event = await appendEvent(deps.env, room.name, (events) => {
-    if (events.some((e) => e.kind === "alert" && e.key === alert.key)) throw new Duplicate();
-    if (stillValid && !stillValid(events)) throw new Duplicate();
-    return { kind: "alert" as const, ...alert };
-  }, room).catch((error: unknown) => {
-    if (error instanceof Duplicate) return null;
-    throw error;
-  });
-  if (event) deps.out(`alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}: ${alert.text}`);
-  return event;
-}
-
-async function deliverPending(deps: Deps, room: Room): Promise<void> {
-  const events = await readEvents(deps.env, room.name);
-  for (const alert of events.filter((e): e is AlertEvent => e.kind === "alert")) {
-    const attempts = events.filter((e) => e.kind === "delivery" && e.ref === alert.seq);
-    const rounds = attempts.filter((e) => e.kind === "delivery" && e.channel === "notification").length;
-    if (attempts.some((e) => e.kind === "delivery" && e.ok) || rounds >= MAX_ALERT_ROUNDS) continue;
-    await deliverAlert(deps, room, alert);
-  }
-}
-
-/**
- * Ask Jev about cases whose communication changed since their last
- * assessment, once a handback exists. Each state (case, last message seq) is
- * assessed at most once, failed requests included: no retries (ADR 0005). In
- * alert mode a recorded drift for a case's current state always has an alert,
- * including one recorded in shadow mode or before a crash.
- */
-async function assess(deps: Deps, room: Room, config: WatchConfig, jev: JevOptions, now: number): Promise<AlertEvent[]> {
-  const events = await readEvents(deps.env, room.name);
-  const assessed = new Map<string, AssessmentEvent>();
-  for (const e of events) if (e.kind === "assessment") assessed.set(`${e.case}:${e.upTo}`, e);
-  const raised: AlertEvent[] = [];
-  let budget = MAX_ASSESSMENTS_PER_PASS;
-  // Oldest current state first, so cases that change often cannot starve
-  // the others under the per-pass budget.
-  const views = [...foldCases(events).values()].sort((a, b) => a.messages.at(-1)!.seq - b.messages.at(-1)!.seq);
-  for (const view of views) {
-    const upTo = view.messages.at(-1)!.seq;
-    const evidence = caseEvidence(view, now, config);
-    if (!evidence) continue;
-    let assessment = assessed.get(`${view.id}:${upTo}`) ?? null;
-    if (!assessment) {
-      if (budget-- <= 0) continue;
-      const answers = await jev.evaluate(evidence, new AbortController().signal).catch(() => null);
-      const verdict = decision(answers, evidence, jev.threshold);
-      const summary = answers && Object.fromEntries(Object.entries(answers).map(([k, a]) => [k, { choice: a.choice, confidence: a.confidence }]));
-      // Under the lock: a concurrent watcher may have assessed this state already.
-      assessment = await appendEvent(deps.env, room.name, (current) => {
-        if (current.some((e) => e.kind === "assessment" && e.case === view.id && e.upTo === upTo)) throw new Duplicate();
-        return { kind: "assessment" as const, case: view.id, upTo, mode: jev.mode === "alert" ? "alert" as const : "shadow" as const, verdict, answers: summary };
-      }, room).catch((error: unknown) => {
-        if (error instanceof Duplicate) return null;
-        throw error;
-      });
-      if (!assessment) continue;
-      deps.out(`assessed ${view.id} up to seq ${upTo}: ${verdict}`);
+  /** One pass. Throws GoneError when the project no longer exists. */
+  async tick(): Promise<void> {
+    const project = await loadProject(this.deps.env, this.projectId);
+    if (!project) throw new GoneError(`Project ${this.projectId} does not exist`);
+    await pump(this.deps, project.id);
+    this.startRequest(project, await readLedger(this.deps.env, project.id));
+    const state = fold(await readLedger(this.deps.env, project.id));
+    const agents = await this.deps.herdr.agentList().catch(() => null);
+    if (agents) {
+      const status = new Map(agents.map((a) => [a.paneId, a.status]));
+      await this.checkPanes(project, state, status);
+      await this.retire(project, state, status);
     }
-    if (jev.mode !== "alert" || assessment.verdict !== "drift" || !assessment.answers) continue;
-    const judged = Object.entries(assessment.answers).map(([k, a]) => `${k}: ${a.choice} ${a.confidence.toFixed(2)}`).join(", ");
-    const alert = await recordAlert(deps, room, {
-      key: `jev:${view.id}:${upTo}`, rule: "jev-drift", case: view.id, member: null,
-      text: `Jev judged the communication on ${view.id} (up to seq ${upTo}) as protocol drift (${judged}). ` +
-        `This is a model judgment, not proof; review \`slp log ${view.id}\`.`,
-    }, (current) => foldCases(current).get(view.id)?.messages.at(-1)?.seq === upTo);
-    if (alert) raised.push(alert);
+    await this.remindAsks(project, state);
   }
-  return raised;
-}
 
-/** Evidence for the latest handback of a case, or null before any handback. */
-export function caseEvidence(view: CaseView, now: number, config: WatchConfig): Evidence | null {
-  const handback = view.messages.findLast((m) => m.kind === "handback");
-  if (!handback) return null;
-  const brief = view.messages.findLast((m) => m.kind !== "handback" && m.to === handback.from && m.seq < handback.seq);
-  const last = view.messages.at(-1)!;
-  return {
-    leadId: view.lead,
-    peerId: handback.from,
-    case: view.id,
-    brief: brief?.text ?? "",
-    handback: handback.text,
-    roomMessages: view.messages.filter((m) => m.kind !== "handback" && m.seq > handback.seq)
-      .map((m) => ({ seq: m.seq, from: m.from, to: m.to, text: m.text })),
-    uncertainRoomMessages: [],
-    pendingDelayElapsed: now - Date.parse(last.ts) > config.leadIdleMs,
-    incompleteCommunication: view.undelivered.length > 0,
-  };
-}
-
-async function observe(deps: Deps, room: Room, now: number): Promise<Record<string, Observation>> {
-  const agents = await deps.herdr.agentList();
-  const statePath = join(roomDir(deps.env, room.name), "watch.json");
-  const previous = await loadState(statePath);
-  const observed: Record<string, Observation> = {};
-  for (const [name, member] of Object.entries(room.members)) {
-    const agent = agents.find((a) => a.paneId === member.paneId);
-    // A different kind in the pane means the member was replaced. Without a
-    // kind the occupant cannot be attributed: its state is unknown.
-    const status = !agent || (agent.kind !== null && agent.kind !== member.kind) ? "gone"
-      : agent.kind === null ? "unknown" : toStatus(agent.status);
-    const stateChangeSeq = status === "gone" ? null : agent!.stateChangeSeq;
-    const prev = previous[name];
-    // Same Herdr episode keeps its start time. idle <-> done is only Herdr's
-    // "seen" flag flipping, not a new episode.
-    const sameEpisode = prev !== undefined && prev.stateChangeSeq === stateChangeSeq &&
-      (prev.status === status || (READY.has(prev.status) && READY.has(status)));
-    observed[name] = { status, stateChangeSeq, since: sameEpisode ? prev.since : now };
+  /** Wait for a gate or landing in progress (tests, shutdown). */
+  async settle(): Promise<void> {
+    while (this.inflight) await this.inflight;
   }
-  await writeAtomic(statePath, `${JSON.stringify(observed, null, 2)}\n`);
-  return observed;
-}
 
-async function deliverAlert(deps: Deps, room: Room, alert: AlertEvent): Promise<void> {
-  const record = (channel: "prompt" | "notification", error: string | null) =>
-    appendEvent(deps.env, room.name, () => ({ kind: "delivery" as const, ref: alert.seq, ok: error === null, error, channel }), room);
-  const supervisor = Object.entries(room.members).find(([, m]) => m.role === "supervisor");
-  // A supervisor that is itself blocked or gone cannot take the prompt.
-  if (supervisor && supervisor[0] !== alert.member) {
-    let error: string | null = null;
-    try {
-      await handToAgent(deps, supervisor[1].paneId,
-        `[SLP alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}]\n\n${alert.text}\n\n` +
-        "[SLP] A fact-based reminder, not a verdict. Review with `slp status` / `slp log` and report concerns to the human.");
-    } catch (e) {
-      error = describe(e);
-      deps.out(`  could not reach the supervisor: ${error}`);
+  private startRequest(project: Project, events: SlpEvent[]): void {
+    if (this.inflight) return;
+    const next = pendingRequests(events)[0];
+    if (!next) return;
+    this.deps.out(`working on ${next.request}: ${next.what} ${next.lane}`);
+    this.inflight = runRequest(this.deps, project, next)
+      .catch(async (error: unknown) => {
+        this.deps.out(`${next.request} failed: ${describe(error)}`);
+        await append(this.deps.env, project.id, () => ({
+          kind: "request-done" as const, request: next.request, ok: false, detail: `slp error: ${describe(error)}`,
+        })).catch(() => undefined);
+        await this.tell(project, fold(events), "sup", `slp could not finish ${next.what} for ${next.lane}: ${describe(error)}`, next.lane);
+      })
+      .finally(() => { this.inflight = null; });
+  }
+
+  private async tell(project: Project, state: State, to: string | null, text: string, lane: string | null): Promise<void> {
+    const target = to && state.seats.get(to)?.live ? to : "human";
+    await sendLetter(this.deps, project.id, { letter: "NOTICE", from: "slp", to: target, lane, text })
+      .catch((error: unknown) => this.deps.out(`could not tell ${target}: ${describe(error)}`));
+  }
+
+  /** Seats whose pane is gone, or stuck on a prompt only the Human can answer. */
+  private async checkPanes(project: Project, state: State, status: Map<string, string>): Promise<void> {
+    for (const seat of liveSeats(state)) {
+      const s = status.get(seat.paneId);
+      if (s === undefined) {
+        const n = (this.missing.get(seat.name) ?? 0) + 1;
+        this.missing.set(seat.name, n);
+        if (n >= watchTiming.goneTicks) {
+          this.missing.delete(seat.name);
+          await append(this.deps.env, project.id, () => ({ kind: "seat-stop" as const, name: seat.name, reason: "its pane is gone" }));
+          await this.tell(project, state, superiorOf(state, seat),
+            `${seat.name} (${seat.role}) is gone: its pane ${seat.paneId} no longer runs an agent.`, seat.lane);
+        }
+        continue;
+      }
+      this.missing.delete(seat.name);
+      if (s === "blocked") {
+        const since = this.blockedSince.get(seat.name) ?? this.now();
+        this.blockedSince.set(seat.name, since);
+        if (this.now() - since >= watchTiming.blockedMs && !this.blockedTold.has(seat.name)) {
+          this.blockedTold.add(seat.name);
+          await this.deps.herdr.notify(`slp: ${seat.name} waits on you`, `A prompt in pane ${seat.paneId} needs the Human.`).catch(() => undefined);
+          const up = superiorOf(state, seat);
+          if (up) {
+            await this.tell(project, state, up,
+              `${seat.name} has waited on a prompt in its pane for ${Math.round((this.now() - since) / 60_000)} min; the Human was notified.`, seat.lane);
+          }
+        }
+      } else {
+        this.blockedSince.delete(seat.name);
+        this.blockedTold.delete(seat.name);
+      }
     }
-    await record("prompt", error);
   }
-  let error: string | null = null;
-  try {
-    await deps.herdr.notify(`SLP ${room.name}: ${alert.rule}`, alert.text);
-  } catch (e) {
-    error = describe(e);
-    deps.out(`  notification failed: ${error}`);
+
+  /** Close Reviewer and Critic seats that have reported, once their turn ends. */
+  private async retire(project: Project, state: State, status: Map<string, string>): Promise<void> {
+    for (const seat of liveSeats(state)) {
+      if (!finished(state, seat)) continue;
+      const s = status.get(seat.paneId);
+      if (s === "working" || s === "blocked") continue;
+      await closeSeat(this.deps, project.id, seat, "reported");
+      this.deps.out(`closed ${seat.name}: it has reported`);
+    }
   }
-  await record("notification", error);
+
+  private async remindAsks(project: Project, state: State): Promise<void> {
+    for (const ask of state.asks.values()) {
+      if (ask.answer !== null || ask.to === "human") continue;
+      if (!state.seats.get(ask.to)?.live || !state.seats.get(ask.from)?.live) continue;
+      const reminders = state.letters.filter((l) => l.letter === "STILL_OPEN" && l.text.startsWith(`${ask.id} `));
+      if (reminders.length >= watchTiming.askReminders) continue;
+      const last = Date.parse(reminders.at(-1)?.ts ?? ask.askedAt);
+      if (this.now() - last < watchTiming.askReminderMs) continue;
+      await sendLetter(this.deps, project.id, { letter: "STILL_OPEN", from: "slp", to: ask.to,
+        text: `${ask.id} from ${ask.from} is unanswered after ${Math.round((this.now() - Date.parse(ask.askedAt)) / 60_000)} min: ${ask.text}` })
+        .catch((error: unknown) => this.deps.out(`could not remind ${ask.to}: ${describe(error)}`));
+    }
+  }
 }
 
-function toStatus(status: string): Observation["status"] {
-  return status === "idle" || status === "done" || status === "working" || status === "blocked" ? status : "unknown";
-}
-
-async function loadState(path: string): Promise<Record<string, Observation>> {
-  try {
-    const parsed = StateSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
-    return parsed.success ? parsed.data : {};
-  } catch {
-    return {};
-  }
+function finished(state: State, seat: Seat): boolean {
+  if (seat.role === "reviewer") return [...state.reviews.values()].some((r) => r.seat === seat.name && r.done);
+  if (seat.role === "critic") return state.letters.some((l) => l.from === seat.name && l.letter === "CRITIQUE");
+  return false;
 }
