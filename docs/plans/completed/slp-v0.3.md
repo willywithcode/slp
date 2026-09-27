@@ -4,7 +4,7 @@ Date: 2026-09-27
 
 ## Status
 
-Active
+Completed 2026-09-27 (v0.3.0)
 
 ## Outcome
 
@@ -158,8 +158,7 @@ actionable findings, docs and ADRs current.
 - [x] 5. Jev sensor and `slp calibrate` (fake Jev in tests; no key used).
 - [x] 6. Jev loop control with code fallbacks first (turn ends, asks, briefs,
   hand-backs, lanes, Critic first pass, landing holds, retrospective).
-- [ ] 7. Release: v0.3.0 tag, mustang skill `slp` (harness-core PR #1),
-  docs.
+- [x] 7. Release: v0.3.0 tag, mustang skill `slp` (harness-core), docs.
 
 Open for the owner: a live run of parallel Codex Peers on accounts acc2 and
 acc3 waits on the one-time Codex Windows sandbox setup for those accounts
@@ -190,6 +189,10 @@ by the owner's permission policy (ADR 0014).
 - 2026-09-27: Landing holds for high-risk lanes without a lane review and for
   migrations or destructive SQL; the Human agrees via `--over-risk`
   (ADR 0015).
+- 2026-09-27: Review rounds 3-4: holds name the held commit and an override
+  covers only that commit, checked again when the watcher lands; gates must
+  leave the copy clean; lane reviews cover later commits only through clean
+  base merges; the Critic's Jev pass is record-only (ADR 0015).
 - 2026-09-27: No `plan-tasks` verb: a Lead plans in its own context and
   briefs task by task; the durable plan, when needed, is the repository's.
 
@@ -202,4 +205,14 @@ by the owner's permission policy (ADR 0014).
 
 ## Result
 
-Pending.
+v0.3.0: 109 tests (fake Herdr, real git, transcript samples, fake Jev), CI
+green on Windows, macOS and Ubuntu with Node 22 and 24. Four rounds of
+independent review (general-purpose and Codex) until the last found only one
+narrow defect, fixed with a test. Live lab runs on Windows proved the core
+loop end to end (lane → Codex task → hand-back → accept → gate → squash
+landing), Critic and amendments, parallel Peers across Codex accounts up to
+their sandbox prompts, and dropping a lane.
+
+Left for the owner: set up the Codex Windows sandbox for accounts acc2 and
+acc3 (then parallel Peers run without prompts); a live run with a Jev key
+(TypeSafe or OpenRouter) to start collecting marks for `slp calibrate`.

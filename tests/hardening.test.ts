@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { append } from "../src/core/ledger.js";
@@ -307,5 +307,30 @@ describe("third review round", () => {
     await w.as("L1-T2", ["done", "complete", "--check", "ok", "done"]);
     await w.as("L1", ["accept", "L1-T2"]);
     await expect(w.as("sup", ["close-lane", "L1", "--land", "--over-risk", "--reason", "the Human agreed"])).rejects.toThrow(/changed since it was held/);
+  });
+});
+
+describe("fourth review round", () => {
+  it("an override does not cover commits added before the watcher lands it", async () => {
+    const w = await started();
+    await w.as("sup", ["open-lane", "--title", "Cleanup", "--outcome", "remove stale rows", "--accept", "a", "--write", "src/**"]);
+    w.cli.idleAll();
+    await w.as("L1", ["start-task", "--title", "t", "--goal", "g", "--accept", "a", "--own", "src/**"]);
+    await commitFile(w.repo, "src/clean.js", "db.run('DELETE FROM sessions');\n");
+    w.cli.idleAll();
+    await w.as("L1-T1", ["done", "complete", "--check", "ok", "done"]);
+    await w.as("L1", ["accept", "L1-T1"]);
+    await w.as("sup", ["close-lane", "L1", "--land"]);
+    await watchOnce(w);
+    const sup = (await w.state()).seats.get("sup")!;
+    const dir = join(w.home, "claude", "projects", "p");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${sup.sessionId}.jsonl`), JSON.stringify({ type: "user", timestamp: new Date(Date.now() + 1000).toISOString(), message: { content: "ok, land it" } }) + "\n");
+    w.cli.idleAll();
+    await w.as("sup", ["close-lane", "L1", "--land", "--over-risk", "--reason", "the Human agreed: ok, land it"]);
+    await commitFile(w.repo, "src/sneak.js", "db.run('DROP TABLE users');\n");
+    await watchOnce(w);
+    expect((await w.state()).lanes.get("L1")!.open).toBe(true);
+    expect((await w.inbox("sup")).at(-1)).toMatch(/changed after the Human agreed/);
   });
 });

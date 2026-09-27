@@ -98,6 +98,8 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
   // moves meanwhile, the update below refuses rather than undo those commits.
   const baseHead = await head(root, lane.base);
   const lanePre = await head(root, lane.branch);
+  // An override covers exactly the commit the Human agreed to; anything added since is checked again.
+  if (req.overRisk && req.heldAt !== lanePre) return fail(`${lane.id} changed after the Human agreed to land it over the hold; land it again without --over-risk`, false);
   const upToDate = (await git(root, ["merge-base", "--is-ancestor", baseHead, lanePre])).code === 0;
   if (!upToDate) {
     const merged = await mergeInto(lane.workdir, baseHead, `Merge ${lane.base} into ${lane.branch}`);

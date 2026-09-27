@@ -137,6 +137,7 @@ export async function closeLane(a, laneId, how) {
     if (pendingRequests(events).some((r) => r.lane === laneId))
         throw new SlpError(`Lane ${laneId} has a gate or landing in progress.`);
     let note = how.reason;
+    let approved;
     if (how.overRisk) {
         // Lifting a hold is the Human's call (ADR 0015): it needs a hold, and the
         // Human's own words to the Supervisor since then, which go on the record.
@@ -154,11 +155,12 @@ export async function closeLane(a, laneId, how) {
         if (!words.length) {
             throw new SlpError(`slp found no words from the Human since ${laneId} was held (${held.ts}). Show them the reason; land over the hold only once they agree here.`);
         }
+        approved = heldAt;
         note = `${how.reason}\n\nThe Human, after the hold:\n${words.map((w) => `> ${w.replace(/\n/g, "\n> ")}`).join("\n")}`;
     }
     const req = await append(a.deps.env, a.project.id, (evs) => ({
         kind: "request", request: nextId(evs, "request", "Q"), what: "land", lane: laneId, by: a.seat.name,
-        note, overGate: how.overGate, ...(how.overRisk ? { overRisk: true } : {}),
+        note, overGate: how.overGate, ...(how.overRisk ? { overRisk: true, heldAt: approved } : {}),
     }));
     const watching = await lockHeldByLiveProcess(watchLockPath(a.deps.env, a.project.id));
     a.deps.out(`Landing ${laneId} (${req.request}): the watcher merges ${lane.base} in, runs the gate and lands it; a LANDED or REPORT letter follows.` +

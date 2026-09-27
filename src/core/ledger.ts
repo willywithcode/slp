@@ -101,6 +101,8 @@ export const EventSchema = z.discriminatedUnion("kind", [
     by: z.string(), note: text, overGate: z.boolean(),
     // Land although slp holds it for risk (the Human agreed; the reason says so).
     overRisk: z.boolean().optional(),
+    // The lane commit the Human agreed to land over a hold.
+    heldAt: z.string().optional(),
   }),
   z.object({ kind: z.literal("request-done"), ...base, request: z.string(), ok: z.boolean(), detail: text }),
   z.object({
