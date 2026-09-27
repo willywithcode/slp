@@ -18,6 +18,7 @@ Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
 - [0009](0009-watch-and-jev.md) Watch from transcripts; Jev as sensor and System 1
 - [0010](0010-team-rules-location.md) Team rules live in seat prompts and the mustang skill
 - [0011](0011-accounts-and-models.md) Accounts and models per seat, managed by the Supervisor
+- [0012](0012-herdr-is-the-backbone.md) Herdr is the backbone: seats open and talk only through Herdr
 
 ## Add A Decision When
 

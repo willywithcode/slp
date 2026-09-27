@@ -151,6 +151,8 @@ actionable findings, docs and ADRs current.
 - 2026-09-27: Decisions listed under Context; ADRs 0006-0010.
 - 2026-09-27: Accounts and models per seat, Supervisor-managed account
   moves on usage limits (ADR 0011).
+- 2026-09-27: Owner rule: all communication between roles goes through
+  Herdr; seats are opened with `herdr agent start` (ADR 0012).
 - 2026-09-27: The local folder is still named `spl` (held open by another
   process); rename when free.
 

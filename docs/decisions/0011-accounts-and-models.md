@@ -18,9 +18,17 @@ another account.
 
 ## Decision
 
-- **Launchers** in `~/.slp/config.json`: a name, the agent kind, and the
-  command to type in the seat's pane (e.g. `claude-as acc1`). slp never
-  reads or stores tokens; each platform declares its own commands.
+- **Launchers** in `~/.slp/config.json`: a name, the agent kind, the
+  seat's environment, and an optional pane preparation. Seats are opened
+  through Herdr (ADR 0012): the pane is created with the environment, the
+  preparation runs in that pane, then `herdr agent start` starts the agent,
+  which inherits it.
+  - Codex account: environment only (`CODEX_HOME`, `CODEX_SQLITE_HOME`,
+    empty `OPENAI_API_KEY`), exactly what `codex-as` sets; no secret.
+  - Claude account: the pane decrypts its own token from
+    `~/.secrets/claude-<name>.txt` into `CLAUDE_CODE_OAUTH_TOKEN`, as
+    `claude-as` does. The token never passes through slp or Herdr arguments.
+  - Each platform declares its own launchers.
 - **Models per role** (owner, 2026-09-27):
   - Supervisor: Claude `claude-opus-5-5[1m]`, effort `xhigh`.
   - Lead: Claude `claude-opus-5-5[1m]`, effort `high`.
@@ -49,7 +57,9 @@ Positive:
 
 Tradeoffs:
 
-- Launch goes through a shell command instead of `herdr agent start`, so
-  slp must wait for Herdr to detect the agent; verified in live runs.
+- A Claude account's token lives in its seat pane's environment for the
+  pane's lifetime. Verified 2026-09-27: environment set with `pane split
+  --env` reaches the pane (Codex acc2 logged in); a pane decrypts a Claude
+  token (length checked, value never shown).
 - agy has no documented multi-account mechanism and no narrow permission
   flag yet; it is used with one account.
