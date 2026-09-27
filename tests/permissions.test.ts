@@ -42,7 +42,7 @@ describe("the git shim", () => {
 
   it("refuses the role's denied subcommands, wherever git's own options put them", async () => {
     const { run } = await shim("lead");
-    for (const args of [["push"], ["-C", ".", "push", "origin"], ["-c", "a=b", "commit", "-m", "x"], ["branch", "-D", "x"], ["checkout", "main"]]) {
+    for (const args of [["push"], ["-C", ".", "push", "origin"], ["--git-dir", ".git", "--work-tree", ".", "push"], ["-c", "a=b", "commit", "-m", "x"], ["branch", "-D", "x"], ["checkout", "main"]]) {
       const r = run(args);
       expect(r.status).toBe(1);
       expect(r.stderr).toContain("is not for this seat");

@@ -83,7 +83,9 @@ const denied = new Set((process.env.SLP_GIT_DENY || "").split(",").filter(Boolea
 const args = process.argv.slice(2);
 // The subcommand: the first argument after git's own options (-C dir, -c k=v, --flags).
 let i = 0;
-while (i < args.length && args[i].startsWith("-")) i += args[i] === "-C" || args[i] === "-c" ? 2 : 1;
+// Options that take their value as the next argument (git's own list).
+const valued = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"]);
+while (i < args.length && args[i].startsWith("-")) i += valued.has(args[i]) ? 2 : 1;
 const sub = args[i];
 const forced = sub === "branch" && args.slice(i + 1).some((a) => a === "-D" || a === "-f" || a === "--force");
 if ((sub && denied.has(sub)) || forced) {
