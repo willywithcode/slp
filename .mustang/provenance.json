@@ -1,7 +1,7 @@
 {
-  "core_version": "0.11.0",
+  "core_version": "0.12.2",
   "target": "both",
-  "installed_at": "2026-09-26T06:12:01.0492284Z",
+  "installed_at": "2026-09-27T03:23:16.3098448Z",
   "files": {
     ".agents/skills/audit-onboarding-proposal/SKILL.md": "sha256:8aa6e5d75743f747818a72cb2376efea9971882c23ebaaee18489095cad5f53e",
     ".agents/skills/audit-onboarding-proposal/agents/openai.yaml": "sha256:1f822840d05d627c43e8dcb87a8c54ef28e52c24cba72cf6950c142e360e1a81",
@@ -59,6 +59,8 @@
     ".agents/skills/resolving-merge-conflicts/agents/openai.yaml": "sha256:a1f4f96838f2ed6282eb28abbbf99029cb8fadce552baf53da90a025b8bffddf",
     ".agents/skills/smart-commits/SKILL.md": "sha256:a0edded3ecf2e74dcb0098718386998a5d7d0f32b595d67d25fea84a01b74de9",
     ".agents/skills/smart-commits/agents/openai.yaml": "sha256:612317be8a00c6454e1d45bf0ee15ef7f75c10ebc215cb4465f2bf03f0efb38b",
+    ".agents/skills/spl/SKILL.md": "sha256:3a516b6f110f92883c09f92270032b33afb2a7cf045d91b43567619d395cb7c0",
+    ".agents/skills/spl/agents/openai.yaml": "sha256:f7762feba04321b42663c9aef1720d436e74025b82bb5c36ed36833dd11fec2b",
     ".agents/skills/tdd/SKILL.md": "sha256:cb01f66bebfaa25fa1f88e6b7e769cd9fd9f35b1120b8563749820738814c927",
     ".agents/skills/tdd/agents/openai.yaml": "sha256:ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
     ".agents/skills/tdd/mocking.md": "sha256:3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",
@@ -139,6 +141,8 @@
     ".claude/skills/resolving-merge-conflicts/agents/openai.yaml": "sha256:a1f4f96838f2ed6282eb28abbbf99029cb8fadce552baf53da90a025b8bffddf",
     ".claude/skills/smart-commits/SKILL.md": "sha256:a0edded3ecf2e74dcb0098718386998a5d7d0f32b595d67d25fea84a01b74de9",
     ".claude/skills/smart-commits/agents/openai.yaml": "sha256:612317be8a00c6454e1d45bf0ee15ef7f75c10ebc215cb4465f2bf03f0efb38b",
+    ".claude/skills/spl/SKILL.md": "sha256:3a516b6f110f92883c09f92270032b33afb2a7cf045d91b43567619d395cb7c0",
+    ".claude/skills/spl/agents/openai.yaml": "sha256:f7762feba04321b42663c9aef1720d436e74025b82bb5c36ed36833dd11fec2b",
     ".claude/skills/tdd/SKILL.md": "sha256:cb01f66bebfaa25fa1f88e6b7e769cd9fd9f35b1120b8563749820738814c927",
     ".claude/skills/tdd/agents/openai.yaml": "sha256:ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
     ".claude/skills/tdd/mocking.md": "sha256:3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",
