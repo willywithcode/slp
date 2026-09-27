@@ -34,7 +34,7 @@ export interface JevOptions { mode: "off" | "shadow" | "alert"; evaluate: Evalua
  */
 export async function watchTick(deps: Deps, room: Room, config: WatchConfig, jev?: JevOptions): Promise<AlertEvent[]> {
   const current = await loadRoom(deps.env, room.name);
-  if (!current) throw new RoomGoneError(`Room "${room.name}" does not exist (it may have been archived by \`spl down\`)`);
+  if (!current) throw new RoomGoneError(`Room "${room.name}" does not exist (it may have been archived by \`slp down\`)`);
   if (current.workspaceId !== room.workspaceId || current.createdAt !== room.createdAt) {
     throw new RoomGoneError(`Room "${room.name}" was replaced by a newer room with the same name`);
   }
@@ -131,7 +131,7 @@ async function assess(deps: Deps, room: Room, config: WatchConfig, jev: JevOptio
     const alert = await recordAlert(deps, room, {
       key: `jev:${view.id}:${upTo}`, rule: "jev-drift", case: view.id, member: null,
       text: `Jev judged the communication on ${view.id} (up to seq ${upTo}) as protocol drift (${judged}). ` +
-        `This is a model judgment, not proof; review \`spl log ${view.id}\`.`,
+        `This is a model judgment, not proof; review \`slp log ${view.id}\`.`,
     }, (current) => foldCases(current).get(view.id)?.messages.at(-1)?.seq === upTo);
     if (alert) raised.push(alert);
   }
@@ -190,8 +190,8 @@ async function deliverAlert(deps: Deps, room: Room, alert: AlertEvent): Promise<
     let error: string | null = null;
     try {
       await handToAgent(deps, supervisor[1].paneId,
-        `[SPL alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}]\n\n${alert.text}\n\n` +
-        "[SPL] A fact-based reminder, not a verdict. Review with `spl status` / `spl log` and report concerns to the human.");
+        `[SLP alert ${alert.rule}${alert.case ? ` ${alert.case}` : ""}]\n\n${alert.text}\n\n` +
+        "[SLP] A fact-based reminder, not a verdict. Review with `slp status` / `slp log` and report concerns to the human.");
     } catch (e) {
       error = describe(e);
       deps.out(`  could not reach the supervisor: ${error}`);
@@ -200,7 +200,7 @@ async function deliverAlert(deps: Deps, room: Room, alert: AlertEvent): Promise<
   }
   let error: string | null = null;
   try {
-    await deps.herdr.notify(`SPL ${room.name}: ${alert.rule}`, alert.text);
+    await deps.herdr.notify(`SLP ${room.name}: ${alert.rule}`, alert.text);
   } catch (e) {
     error = describe(e);
     deps.out(`  notification failed: ${error}`);

@@ -16,10 +16,10 @@ one another.
 
 - Every message is appended to the room log under a lock (gap-free `seq`)
   before delivery; each delivery attempt appends a `delivery` event. A failed
-  delivery exits non-zero and is retried only by its sender (`spl redeliver`).
+  delivery exits non-zero and is retried only by its sender (`slp redeliver`).
 - Herdr has no idempotent prompt, so a message without any recorded outcome is
   *unconfirmed*, not failed: it may already be in the target pane.
-  `spl redeliver` retries only refused deliveries unless `--force` is given.
+  `slp redeliver` retries only refused deliveries unless `--force` is given.
 - A sender that cannot reach Herdr at all (an agent sandbox) records the
   message as *queued* when a room watcher is alive; the watcher claims it
   (`relaying`) and delivers it. A relay that stops midway shows as
@@ -57,7 +57,7 @@ Positive:
 
 Tradeoffs:
 
-- Messages that bypass `spl` are invisible; only the guide forbids them.
+- Messages that bypass `slp` are invisible; only the guide forbids them.
 - Identity prevents mistakes, not a hostile local process: environment
   variables can be forged by anything running as the same user.
 - Residual lock risk, accepted: if a process dies inside the millisecond-long

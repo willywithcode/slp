@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 import { acquireLock, appendEvent, eventsPath, lockTiming, nextCaseId, readEvents, releaseLock } from "../src/log.js";
 import { tempHome } from "./helpers.js";
 
-/** An env whose room directory exists, as `spl up` would leave it. */
+/** An env whose room directory exists, as `slp up` would leave it. */
 async function roomEnv() {
   const home = await tempHome();
   await mkdir(join(home, "rooms", "demo"), { recursive: true });
-  return { SPL_HOME: home };
+  return { SLP_HOME: home };
 }
 
 const draft = (text: string) => (events: unknown[]) =>
@@ -54,8 +54,8 @@ describe("room lock", () => {
   it("reclaims a lock whose owner process is dead", async () => {
     const home = await tempHome();
     await plantLock(home, { token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() });
-    await appendEvent({ SPL_HOME: home }, "demo", draft("after crash"));
-    expect(await readEvents({ SPL_HOME: home }, "demo")).toHaveLength(1);
+    await appendEvent({ SLP_HOME: home }, "demo", draft("after crash"));
+    expect(await readEvents({ SLP_HOME: home }, "demo")).toHaveLength(1);
   });
 
   it("never takes a lock from a live owner, however old", async () => {
@@ -63,7 +63,7 @@ describe("room lock", () => {
     await plantLock(home, { token: "live", pid: process.pid, host: hostname(), at: Date.now() - 3_600_000 }, 3_600_000);
     lockTiming.timeoutMs = 300;
     try {
-      await expect(appendEvent({ SPL_HOME: home }, "demo", draft("x"))).rejects.toThrow(new RegExp(`held by pid ${process.pid}`));
+      await expect(appendEvent({ SLP_HOME: home }, "demo", draft("x"))).rejects.toThrow(new RegExp(`held by pid ${process.pid}`));
     } finally {
       lockTiming.timeoutMs = 10_000;
     }
@@ -73,8 +73,8 @@ describe("room lock", () => {
   it("reclaims an ownerless lock only once it is old", async () => {
     const home = await tempHome();
     await plantLock(home, null, 60_000);
-    await appendEvent({ SPL_HOME: home }, "demo", draft("x"));
-    expect(await readEvents({ SPL_HOME: home }, "demo")).toHaveLength(1);
+    await appendEvent({ SLP_HOME: home }, "demo", draft("x"));
+    expect(await readEvents({ SLP_HOME: home }, "demo")).toHaveLength(1);
   });
 
   it("keeps later events after a torn trailing line", async () => {
@@ -90,15 +90,15 @@ describe("room lock", () => {
 describe("lock release and guard", () => {
   it("releasing a lock whose room was just archived is not an error", async () => {
     const env = await roomEnv();
-    const lock = join(env.SPL_HOME, "rooms", "demo", "events.lock");
+    const lock = join(env.SLP_HOME, "rooms", "demo", "events.lock");
     const token = await acquireLock(lock);
-    await rm(join(env.SPL_HOME, "rooms", "demo"), { recursive: true });
+    await rm(join(env.SLP_HOME, "rooms", "demo"), { recursive: true });
     await expect(releaseLock(lock, token)).resolves.toBeUndefined();
   });
 
   it("clears a reclaim guard left by a dead process without waiting for it to age", async () => {
     const env = await roomEnv();
-    const dir = join(env.SPL_HOME, "rooms", "demo");
+    const dir = join(env.SLP_HOME, "rooms", "demo");
     await mkdir(join(dir, "events.lock"));
     await writeFile(join(dir, "events.lock", "owner.json"), JSON.stringify({ token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() }));
     await mkdir(join(dir, "events.lock.reclaim"));
@@ -114,7 +114,7 @@ describe("lock release and guard", () => {
 
   it("never removes a reclaim guard held by a live process, however old", async () => {
     const env = await roomEnv();
-    const dir = join(env.SPL_HOME, "rooms", "demo");
+    const dir = join(env.SLP_HOME, "rooms", "demo");
     await mkdir(join(dir, "events.lock"));
     await writeFile(join(dir, "events.lock", "owner.json"), JSON.stringify({ token: "dead", pid: 2 ** 22 + 12345, host: hostname(), at: Date.now() }));
     await mkdir(join(dir, "events.lock.reclaim"));

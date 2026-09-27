@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 export async function tempHome(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "spl-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "slp-test-"));
   dirs.push(dir);
   return dir;
 }
@@ -102,7 +102,7 @@ export class FakeHerdrCli {
 
 export function deps(home: string, pane: string | undefined, cli: FakeHerdrCli, out: string[] = []): Deps {
   return {
-    env: { SPL_HOME: home, ...(pane ? { HERDR_PANE_ID: pane } : {}) },
+    env: { SLP_HOME: home, ...(pane ? { HERDR_PANE_ID: pane } : {}) },
     herdr: new Herdr(cli.exec, "herdr"),
     out: (line) => { out.push(line); },
   };
@@ -111,5 +111,5 @@ export function deps(home: string, pane: string | undefined, cli: FakeHerdrCli, 
 /** A caller inside an agent sandbox: it can write files but cannot reach Herdr. */
 export function sandboxed(home: string, pane: string, out: string[] = []): Deps {
   const denied = async (): Promise<ExecResult> => ({ code: 1, stdout: "", stderr: 'Error: Os { code: 5, kind: PermissionDenied, message: "Access is denied." }' });
-  return { env: { SPL_HOME: home, HERDR_PANE_ID: pane }, herdr: new Herdr(denied, "herdr"), out: (line) => { out.push(line); } };
+  return { env: { SLP_HOME: home, HERDR_PANE_ID: pane }, herdr: new Herdr(denied, "herdr"), out: (line) => { out.push(line); } };
 }

@@ -41,14 +41,14 @@ async function setup(env: Record<string, string> = { JEV_API_KEY: "test-key" }) 
   }) as unknown as typeof fetch;
   const d = { herdr: new Herdr(cli.exec, "herdr"), out: () => undefined, now: () => Date.now(), fetch: fetchFake };
   const as = (m: string) => deps(home, room.members[m]!.paneId, cli);
-  const watch = (...flags: string[]) => main(["watch", "--once", "--room", "demo", ...flags], { SPL_HOME: home, ...env }, d);
-  const events = async () => readEvents({ SPL_HOME: home }, "demo");
+  const watch = (...flags: string[]) => main(["watch", "--once", "--room", "demo", ...flags], { SLP_HOME: home, ...env }, d);
+  const events = async () => readEvents({ SLP_HOME: home }, "demo");
   return { cli, room, requests, replies, as, watch, events };
 }
 
 const kinds = (events: SplEvent[], kind: SplEvent["kind"]) => events.filter((e) => e.kind === kind);
 
-describe("spl watch with Jev", () => {
+describe("slp watch with Jev", () => {
   it("is off by default even when JEV_API_KEY is set (ADR 0005)", async () => {
     const { as, watch, requests, events } = await setup();
     await cmd.send(as("lead"), undefined, "p1", "brief");
@@ -143,7 +143,7 @@ describe("spl watch with Jev", () => {
   });
 });
 
-describe("spl watch with Jev: round-2 safeguards", () => {
+describe("slp watch with Jev: round-2 safeguards", () => {
   it("delivers pending alerts before spending time on Jev", async () => {
     const { as, watch, requests, replies, cli, room } = await setup();
     await cmd.send(as("lead"), undefined, "p1", "brief");
@@ -180,7 +180,7 @@ describe("spl watch with Jev: round-2 safeguards", () => {
   });
 });
 
-describe("spl watch with Jev: round-3 safeguards", () => {
+describe("slp watch with Jev: round-3 safeguards", () => {
   it("serves the oldest pending state first, so busy cases cannot starve others", async () => {
     const { as, watch, requests, replies } = await setup();
     const cases = MAX_ASSESSMENTS_PER_PASS + 1;

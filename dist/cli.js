@@ -9,26 +9,26 @@ import { acquireLock, releaseLock } from "./log.js";
 import { DEFAULT_WATCH } from "./watch.js";
 import { createEvaluator, JEV_MODEL } from "./jev.js";
 import { watchTick } from "./watcher.js";
-const USAGE = `spl — Supervisor/Lead/Peer rooms on Herdr
+const USAGE = `slp — Supervisor/Lead/Peer rooms on Herdr
 
 Human:
-  spl up <room> [--lead KIND] [--peers KIND,KIND] [--supervisor KIND|none] [--cwd DIR] [--watch]
-  spl down <room> [--force]
-  spl status [--room R]
-  spl log <case> [--room R]
-  spl watch [--room R] [--once] [--interval SECONDS] [--jev off|shadow|alert]
+  slp up <room> [--lead KIND] [--peers KIND,KIND] [--supervisor KIND|none] [--cwd DIR] [--watch]
+  slp down <room> [--force]
+  slp status [--room R]
+  slp log <case> [--room R]
+  slp watch [--room R] [--once] [--interval SECONDS] [--jev off|shadow|alert]
 
 Agents (inside a room pane):
-  spl guide [lead|peer|supervisor]
-  spl whoami
-  spl send <peer> [TEXT | - | --file PATH]            (lead)
-  spl reply <case> <peer> [TEXT | - | --file PATH] [--close]  (lead)
-  spl handback <case> [TEXT | - | --file PATH]        (peer)
-  spl redeliver [--force] <seq>
+  slp guide [lead|peer|supervisor]
+  slp whoami
+  slp send <peer> [TEXT | - | --file PATH]            (lead)
+  slp reply <case> <peer> [TEXT | - | --file PATH] [--close]  (lead)
+  slp handback <case> [TEXT | - | --file PATH]        (peer)
+  slp redeliver [--force] <seq>
 
 KIND is a herdr agent kind (claude, codex, opencode, ...). Default room:
-lead claude, peers codex,codex, supervisor claude. Data lives in ~/.spl
-(override with SPL_HOME).`;
+lead claude, peers codex,codex, supervisor claude. Data lives in ~/.slp
+(override with SLP_HOME).`;
 export async function main(argv, env, deps = { herdr: new Herdr(), out: (s) => console.log(s) }) {
     const { values, positionals } = parseArgs({
         args: argv,
@@ -190,9 +190,9 @@ function jevOptions(mode, env, http = fetch) {
     const model = env.JEV_MODEL?.trim() || "jev-1.13.0";
     if (!JEV_MODEL.test(model))
         throw new SplError("JEV_MODEL must be a pinned version such as jev-1.13.0, not an alias");
-    const threshold = Number(env.SPL_ALERT_CONFIDENCE ?? 0.9);
+    const threshold = Number(env.SLP_ALERT_CONFIDENCE ?? 0.9);
     if (!(threshold >= 0.5 && threshold <= 1))
-        throw new SplError("SPL_ALERT_CONFIDENCE must be a number from 0.5 to 1");
+        throw new SplError("SLP_ALERT_CONFIDENCE must be a number from 0.5 to 1");
     return { mode, evaluate: createEvaluator({ apiKey, model }, http), threshold };
 }
 async function readStdin() {
@@ -218,10 +218,10 @@ export async function run(argv, env) {
     }
     catch (error) {
         if (error instanceof UsageError || error.code?.startsWith("ERR_PARSE_ARGS")) {
-            console.error(`spl: ${error.message}\nRun \`spl help\` for usage.`);
+            console.error(`slp: ${error.message}\nRun \`slp help\` for usage.`);
             return 2;
         }
-        console.error(`spl: ${error instanceof SplError ? error.message : error instanceof Error ? error.message : String(error)}`);
+        console.error(`slp: ${error instanceof SplError ? error.message : error instanceof Error ? error.message : String(error)}`);
         return 1;
     }
 }

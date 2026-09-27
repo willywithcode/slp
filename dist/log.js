@@ -22,7 +22,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
         // claimed it and is delivering it now.
         stage: z.enum(["queued", "relaying"]).optional(),
     }),
-    // Raised by `spl watch`. `key` identifies the trigger so it fires once.
+    // Raised by `slp watch`. `key` identifies the trigger so it fires once.
     z.object({
         kind: z.literal("alert"), ...base, key: z.string(), rule: z.string(),
         case: z.string().nullable(), member: z.string().nullable(), text: z.string(),
@@ -91,9 +91,9 @@ function safeJson(line) {
  */
 export async function appendEvent(env, room, build, expect) {
     const dir = roomDir(env, room);
-    // Never recreate a room: after `spl down` archived it, a late writer (e.g. a
+    // Never recreate a room: after `slp down` archived it, a late writer (e.g. a
     // watcher still running) must fail rather than start a new, split log.
-    const gone = () => new RoomGoneError(`Room "${room}" does not exist (it may have been archived by \`spl down\`)`);
+    const gone = () => new RoomGoneError(`Room "${room}" does not exist (it may have been archived by \`slp down\`)`);
     if (!(await stat(dir).then((s) => s.isDirectory(), () => false)))
         throw gone();
     const lock = join(dir, "events.lock");

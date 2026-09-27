@@ -1,12 +1,12 @@
 {
-  "name": "spl",
+  "name": "slp",
   "version": "0.2.0",
   "private": true,
   "description": "Supervisor/Lead/Peer rooms for coding agents on top of Herdr",
   "license": "Apache-2.0",
   "type": "module",
   "engines": { "node": ">=22.0.0" },
-  "bin": { "spl": "dist/bin.js" },
+  "bin": { "slp": "dist/bin.js" },
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

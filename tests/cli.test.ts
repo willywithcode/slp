@@ -11,9 +11,9 @@ describe("cli", () => {
     const cli = new FakeHerdrCli();
     const out: string[] = [];
     const d = { herdr: new Herdr(cli.exec, "herdr"), out: (s: string) => { out.push(s); } };
-    expect(await main(["up", "demo", "--peers", "codex", "--supervisor", "none", "--cwd", home], { SPL_HOME: home }, d)).toBe(0);
-    const lead = { SPL_HOME: home, HERDR_PANE_ID: "w9:p1" };
-    const peer = { SPL_HOME: home, HERDR_PANE_ID: "w9:p2" };
+    expect(await main(["up", "demo", "--peers", "codex", "--supervisor", "none", "--cwd", home], { SLP_HOME: home }, d)).toBe(0);
+    const lead = { SLP_HOME: home, HERDR_PANE_ID: "w9:p1" };
+    const peer = { SLP_HOME: home, HERDR_PANE_ID: "w9:p2" };
 
     const brief = join(home, "brief.md");
     await writeFile(brief, "\uFEFFLine one\nLine two"); // PowerShell writes a BOM
@@ -28,7 +28,7 @@ describe("cli", () => {
     expect(out).toEqual(["p1 (peer) in room demo"]);
     out.length = 0;
     expect(await main(["guide"], peer, d)).toBe(0);
-    expect(out[0]).toMatch(/^# SPL guide: Peer/);
+    expect(out[0]).toMatch(/^# SLP guide: Peer/);
   });
 
   it("rejects bad usage", async () => {
@@ -53,20 +53,20 @@ describe("herdr wrapper", () => {
 });
 
 describe("platform hints", () => {
-  it("tells agents on Windows to call spl.cmd, where PowerShell blocks spl.ps1", async () => {
+  it("tells agents on Windows to call slp.cmd, where PowerShell blocks slp.ps1", async () => {
     const { onboarding, guide } = await import("../src/protocol.js");
-    expect(onboarding("demo", "p1", "peer", "roster", "win32", "codex")).toContain("spl.cmd");
-    expect(onboarding("demo", "p1", "peer", "roster", "linux", "codex")).not.toContain("spl.cmd");
-    // Claude Code runs Git Bash on Windows, where `spl` works; the hint only
-    // made it write `spl ... || spl.cmd ...`, which needed a fresh approval.
-    expect(onboarding("demo", "lead", "lead", "roster", "win32", "claude")).not.toContain("spl.cmd");
-    expect(guide("peer", "win32")).toContain("spl.cmd");
-    expect(guide("peer", "darwin")).not.toContain("spl.cmd");
+    expect(onboarding("demo", "p1", "peer", "roster", "win32", "codex")).toContain("slp.cmd");
+    expect(onboarding("demo", "p1", "peer", "roster", "linux", "codex")).not.toContain("slp.cmd");
+    // Claude Code runs Git Bash on Windows, where `slp` works; the hint only
+    // made it write `slp ... || slp.cmd ...`, which needed a fresh approval.
+    expect(onboarding("demo", "lead", "lead", "roster", "win32", "claude")).not.toContain("slp.cmd");
+    expect(guide("peer", "win32")).toContain("slp.cmd");
+    expect(guide("peer", "darwin")).not.toContain("slp.cmd");
   });
 
   it("explains a pane mismatch caused by agents that run commands elsewhere", async () => {
     const home = await tempHome();
-    await expect(main(["whoami"], { SPL_HOME: home, HERDR_PANE_ID: "wE:p1" }, { herdr: new Herdr(new FakeHerdrCli().exec), out: () => undefined }))
+    await expect(main(["whoami"], { SLP_HOME: home, HERDR_PANE_ID: "wE:p1" }, { herdr: new Herdr(new FakeHerdrCli().exec), out: () => undefined }))
       .rejects.toThrow(/shared background server.*--no-daemon/);
   });
 });
@@ -88,10 +88,10 @@ describe("message files", () => {
     const home = await tempHome();
     const cli = new FakeHerdrCli();
     const d = { herdr: new Herdr(cli.exec, "herdr"), out: () => undefined };
-    await main(["up", "demo", "--peers", "codex", "--supervisor", "none", "--cwd", home], { SPL_HOME: home }, d);
+    await main(["up", "demo", "--peers", "codex", "--supervisor", "none", "--cwd", home], { SLP_HOME: home }, d);
     const file = join(home, "brief-utf16.txt");
     await writeFile(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Héllo\r\nworld", "utf16le")]));
-    await main(["send", "p1", "--file", file], { SPL_HOME: home, HERDR_PANE_ID: "w9:p1" }, d);
-    expect(cli.prompts.at(-1)!.text).toContain("from lead]\n\nHéllo\r\nworld\n\n[SPL]");
+    await main(["send", "p1", "--file", file], { SLP_HOME: home, HERDR_PANE_ID: "w9:p1" }, d);
+    expect(cli.prompts.at(-1)!.text).toContain("from lead]\n\nHéllo\r\nworld\n\n[SLP]");
   });
 });

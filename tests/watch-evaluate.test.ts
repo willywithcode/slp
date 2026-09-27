@@ -46,7 +46,7 @@ describe("peer idle without handback", () => {
     expect(run(briefed, observed, 30_000 + 3 * MIN)).toEqual([]);
     const alerts = run(briefed, observed, 30_000 + 3 * MIN + 1);
     expect(alerts.map((a) => [a.rule, a.case, a.member])).toEqual([["peer-idle-without-handback", "c1", "p1"]]);
-    expect(alerts[0]!.text).toContain("spl log c1");
+    expect(alerts[0]!.text).toContain("slp log c1");
   });
 
   it("does not alert while the peer is working or after it handed back", () => {
@@ -124,14 +124,14 @@ describe("undelivered message", () => {
     const alerts = run(events, observed, 3 * MIN + 1);
     expect(alerts.map((a) => [a.rule, a.case, a.member, a.key])).toEqual([["undelivered", "c1", "p1", "undelivered:1"]]);
     expect(alerts[0]!.text).toContain("delivery outcome is unknown");
-    expect(alerts[0]!.text).toContain("spl redeliver --force 1");
+    expect(alerts[0]!.text).toContain("slp redeliver --force 1");
   });
 
   it("tells the sender to fix the cause when Herdr refused the delivery", () => {
     const events: SplEvent[] = [...log([["brief", "c1", "lead", "p1", 0]], [1]), { kind: "delivery", seq: 2, ts: at(1000), ref: 1, ok: false, error: "agent_blocked" }];
     const [alert] = run(events, { ...allIdle(), p1: obs("working", 0) }, 4 * MIN);
     expect(alert!.text).toContain("delivery failed (agent_blocked)");
-    expect(alert!.text).toContain("spl redeliver 1");
+    expect(alert!.text).toContain("slp redeliver 1");
   });
 
   it("is satisfied by a later successful redelivery", () => {
@@ -195,6 +195,6 @@ describe("queued messages", () => {
       { kind: "delivery", seq: 2, ts: at(1000), ref: 1, ok: false, error: "cannot reach Herdr", stage: "queued" },
     ];
     const [alert] = run(events, { ...allIdle(), p1: obs("working", 0) }, 4 * MIN);
-    expect(alert!.text).toMatch(/queued.*spl watch/);
+    expect(alert!.text).toMatch(/queued.*slp watch/);
   });
 });

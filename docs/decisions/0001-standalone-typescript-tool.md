@@ -1,4 +1,4 @@
-# 0001 spl is a standalone TypeScript tool, separate from mustang
+# 0001 slp is a standalone TypeScript tool, separate from mustang
 
 Date: 2026-09-26
 
@@ -8,21 +8,21 @@ Accepted
 
 ## Context
 
-The owner wants an SPL workflow on Herdr that works with mustang. mustang's
+The owner wants an SLP workflow on Herdr that works with mustang. mustang's
 Harness states it has no task database or orchestration lifecycle, and its
 binary only installs guidance files. The runtime needs a long-lived process,
 network calls (Jev) and credentials.
 
 ## Decision
 
-spl is its own repository and CLI, written in TypeScript for Node.js 22+ (owner
+slp is its own repository and CLI, written in TypeScript for Node.js 22+ (owner
 choice, for parity with paseo-supervision), and must run on Windows, macOS and
-Ubuntu. mustang ships only the agent-facing `spl` protocol skill.
+Ubuntu. mustang ships only the agent-facing `slp` protocol skill.
 
 ## Alternatives Considered
 
-1. A `mustang spl` subcommand in Go: contradicts mustang's scope.
-2. Go for spl: single binary, but no reuse of the accepted TypeScript Jev code.
+1. A `mustang slp` subcommand in Go: contradicts mustang's scope.
+2. Go for slp: single binary, but no reuse of the accepted TypeScript Jev code.
 
 ## Consequences
 

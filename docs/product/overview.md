@@ -1,7 +1,7 @@
-# spl product overview
+# slp product overview
 
 Accepted intent from the owner (2026-09-26): build a Supervisor/Lead/Peer
-(SPL) workflow on Herdr instead of Paseo, integrated with mustang, written in
+(SLP) workflow on Herdr instead of Paseo, integrated with mustang, written in
 TypeScript, usable on Windows, macOS and Ubuntu.
 
 ## Roles
@@ -14,13 +14,13 @@ TypeScript, usable on Windows, macOS and Ubuntu.
 
 ## Communication contract
 
-- Members communicate only through `spl`. A message is recorded in the room
+- Members communicate only through `slp`. A message is recorded in the room
   log first, then delivered to the target's Herdr pane.
 - A brief opens a case (`c1`, `c2`, ...). Only the Lead briefs and replies;
   a reply may go to any Peer (e.g. a reviewer), and a Peer hands back only on
   cases the Lead addressed to it.
 - The obligations for briefs, handbacks and dispositions are the ones printed
-  by `spl guide` (`src/protocol.ts`). They match the Jev rubric accepted in
+  by `slp guide` (`src/protocol.ts`). They match the Jev rubric accepted in
   paseo-supervision and mustang's Completion Standard.
 - A reply either asks for more (the addressed Peer then owes a handback) or,
   with `--close`, accepts and closes the case (nobody owes anything; a later

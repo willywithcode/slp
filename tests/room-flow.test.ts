@@ -21,23 +21,23 @@ async function room(opts: Partial<cmd.UpOptions> = {}) {
   return { home, cli, out, created, as };
 }
 
-describe("spl up", () => {
+describe("slp up", () => {
   it("creates a workspace, one pane per member, starts and onboards every agent", async () => {
     const { cli, created, home } = await room();
     expect(Object.keys(created.members)).toEqual(["lead", "p1", "p2", "sup"]);
     expect(new Set(Object.values(created.members).map((m) => m.paneId)).size).toBe(4);
     const starts = cli.calls.filter((c) => c[0] === "agent" && c[1] === "start").map((c) => [c[2], c[4]]);
     expect(starts).toEqual([["demo-lead", "claude"], ["demo-p1", "codex"], ["demo-p2", "codex"], ["demo-sup", "claude"]]);
-    // Agents must be able to run `spl` without an approval dialog.
+    // Agents must be able to run `slp` without an approval dialog.
     const leadStart = cli.calls.find((c) => c[1] === "start" && c[2] === "demo-lead")!;
-    expect(leadStart.slice(leadStart.indexOf("--"))).toEqual(["--", "--allowedTools", "Bash(spl *)", "Bash(spl.cmd *)"]);
+    expect(leadStart.slice(leadStart.indexOf("--"))).toEqual(["--", "--allowedTools", "Bash(slp *)", "Bash(slp.cmd *)"]);
     const peerStart = cli.calls.find((c) => c[1] === "start" && c[2] === "demo-p1")!;
     expect(peerStart.slice(peerStart.indexOf("--"))).toEqual(["--", "--no-daemon", "--sandbox", "workspace-write", "--add-dir", home]);
     expect(cli.prompts.map((p) => p.target)).toEqual(["demo-lead", "demo-p1", "demo-p2", "demo-sup"]);
-    expect(cli.prompts[1]!.text).toContain('You are "p1", the peer of SPL room "demo"');
+    expect(cli.prompts[1]!.text).toContain('You are "p1", the peer of SLP room "demo"');
     const splits = cli.calls.filter((c) => c[1] === "split");
     expect(splits.every((c) => c.includes("--no-focus"))).toBe(true);
-    expect(splits[0]).toContain("SPL_ROOM=demo");
+    expect(splits[0]).toContain("SLP_ROOM=demo");
   });
 
   it("keeps going when an agent is not ready and tells the human what to paste", async () => {
@@ -54,7 +54,7 @@ describe("spl up", () => {
     const home = await tempHome();
     const cli = new FakeHerdrCli();
     const opts = { room: "demo", cwd: home, lead: "claude", peers: ["codex"], supervisor: null };
-    await mkdir(join(home, "rooms", "demo"), { recursive: true }); // another `spl up demo` in progress
+    await mkdir(join(home, "rooms", "demo"), { recursive: true }); // another `slp up demo` in progress
     await expect(cmd.up(deps(home, undefined, cli), opts)).rejects.toThrow(/being created/);
     expect(cli.calls).toEqual([]);
 
@@ -82,11 +82,11 @@ describe("brief / handback / reply", () => {
     await cmd.reply(as("lead"), undefined, "c1", "p2", "Please review src/auth/login.ts against c1.");
 
     expect(cli.prompts.map((p) => p.target)).toEqual([created.members.p1!.paneId, created.members.lead!.paneId, created.members.p2!.paneId]);
-    expect(cli.prompts[0]!.text).toMatch(/^\[SPL brief c1 from lead\]/);
-    expect(cli.prompts[0]!.text).toContain("spl handback c1");
-    expect(cli.prompts[1]!.text).toContain("spl reply c1 <peer>");
+    expect(cli.prompts[0]!.text).toMatch(/^\[SLP brief c1 from lead\]/);
+    expect(cli.prompts[0]!.text).toContain("slp handback c1");
+    expect(cli.prompts[1]!.text).toContain("slp reply c1 <peer>");
 
-    const view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    const view = foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!;
     expect(view.messages.map((m) => m.kind)).toEqual(["brief", "handback", "reply"]);
     expect(view.state).toBe("lead-replied");
     expect(view.undelivered).toEqual([]);
@@ -124,29 +124,29 @@ describe("brief / handback / reply", () => {
     await expect(cmd.send(deps(home, "w1:p77", cli), undefined, "p1", "x")).rejects.toThrow(/not a member/);
   });
 
-  it("derives identity from the pane only: SPL_AGENT cannot claim another member", async () => {
+  it("derives identity from the pane only: SLP_AGENT cannot claim another member", async () => {
     const { home, cli } = await room();
-    const forged = { ...deps(home, "w9:p77", cli), env: { SPL_HOME: home, HERDR_PANE_ID: "w9:p77", SPL_ROOM: "demo", SPL_AGENT: "lead" } };
+    const forged = { ...deps(home, "w9:p77", cli), env: { SLP_HOME: home, HERDR_PANE_ID: "w9:p77", SLP_ROOM: "demo", SLP_AGENT: "lead" } };
     await expect(cmd.send(forged, undefined, "p1", "x")).rejects.toThrow(/not a member/);
   });
 
   it("requires the pane to be in the room's workspace when Herdr reports one", async () => {
     const { home, cli, created } = await room();
-    const elsewhere = { ...deps(home, created.members.lead!.paneId, cli), env: { SPL_HOME: home, HERDR_PANE_ID: created.members.lead!.paneId, HERDR_WORKSPACE_ID: "w1" } };
+    const elsewhere = { ...deps(home, created.members.lead!.paneId, cli), env: { SLP_HOME: home, HERDR_PANE_ID: created.members.lead!.paneId, HERDR_WORKSPACE_ID: "w1" } };
     await expect(cmd.send(elsewhere, undefined, "p1", "x")).rejects.toThrow(/not a member/);
   });
 
   it("records an undelivered message and lets its sender redeliver it", async () => {
     const { home, cli, created, as } = await room();
     cli.failPromptFor.add(created.members.p1!.paneId);
-    await expect(cmd.send(as("lead"), undefined, "p1", "brief")).rejects.toThrow(/recorded as seq 1 but NOT delivered.*spl redeliver 1/);
-    let view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    await expect(cmd.send(as("lead"), undefined, "p1", "brief")).rejects.toThrow(/recorded as seq 1 but NOT delivered.*slp redeliver 1/);
+    let view = foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!;
     expect(view.undelivered).toEqual([1]);
 
     await expect(cmd.redeliver(as("p1"), undefined, 1, false)).rejects.toThrow(/only its sender/);
     cli.failPromptFor.clear();
     await cmd.redeliver(as("lead"), undefined, 1, false);
-    view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    view = foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!;
     expect(view.undelivered).toEqual([]);
     // Delivered now: a second redeliver would duplicate it.
     await expect(cmd.redeliver(as("lead"), undefined, 1, false)).rejects.toThrow(/already delivered/);
@@ -155,8 +155,8 @@ describe("brief / handback / reply", () => {
   it("refuses to blindly redeliver a message whose delivery outcome is unknown", async () => {
     const { home, cli, as, out } = await room();
     // The sender crashed after Herdr accepted the prompt but before recording it.
-    await appendEvent({ SPL_HOME: home }, "demo", () => ({ kind: "brief" as const, case: "c1", from: "lead", to: "p1", text: "brief" }));
-    const view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    await appendEvent({ SLP_HOME: home }, "demo", () => ({ kind: "brief" as const, case: "c1", from: "lead", to: "p1", text: "brief" }));
+    const view = foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!;
     expect([view.failed, view.unconfirmed]).toEqual([[], [1]]);
     out.length = 0;
     await cmd.status(as("lead"), undefined);
@@ -200,10 +200,10 @@ describe("closing a case", () => {
     cli.prompts = [];
     const closing = await cmd.reply(as("lead"), undefined, "c1", "p1", "Accepted.", true);
     expect(closing).toMatchObject({ kind: "reply", closes: true });
-    expect(cli.prompts[0]!.text).toMatch(/^\[SPL reply c1 from lead, case closed\]/);
+    expect(cli.prompts[0]!.text).toMatch(/^\[SLP reply c1 from lead, case closed\]/);
     expect(cli.prompts[0]!.text).toContain("No handback is needed");
-    expect(cli.prompts[0]!.text).not.toContain("spl handback c1");
-    expect(foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!.state).toBe("closed");
+    expect(cli.prompts[0]!.text).not.toContain("slp handback c1");
+    expect(foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!.state).toBe("closed");
     out.length = 0;
     await cmd.status(as("sup"), undefined);
     expect(out.join("\n")).toMatch(/c1\s+lead -> p1\s+closed/);
@@ -239,7 +239,7 @@ describe("busy panes", () => {
     const out: string[] = [];
     const created = await cmd.up(deps(home, undefined, cli, out), { room: "demo", cwd: home, lead: "claude", peers: ["codex"], supervisor: null });
     expect(created.members.lead!.paneId).toBe("w9:p3");
-    expect((await loadRoom({ SPL_HOME: home }, "demo"))!.members.lead!.paneId).toBe("w9:p3");
+    expect((await loadRoom({ SLP_HOME: home }, "demo"))!.members.lead!.paneId).toBe("w9:p3");
     expect(cli.prompts.map((p) => p.target)).toEqual(["demo-lead", "demo-p1"]);
     expect(out.join("\n")).toMatch(/lead: pane w9:p1 is occupied; using w9:p3/);
   });
@@ -262,20 +262,20 @@ describe("sandboxed senders and the room watcher", () => {
     // failed and ask to redeliver. The sender must read this as success.
     expect(out.join("\n")).toMatch(/recorded; the room watcher will deliver it within seconds\. Nothing else to do\./);
     expect(out.join("\n")).not.toMatch(/denied|fail/i);
-    let view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    let view = foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!;
     expect(view.queued).toEqual([event.seq]);
     cli.prompts = [];
-    await watchTick({ env: { SPL_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined }, created, DEFAULT_WATCH);
+    await watchTick({ env: { SLP_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined }, created, DEFAULT_WATCH);
     expect(cli.prompts.map((p) => p.target)).toEqual([created.members.lead!.paneId]);
-    expect(cli.prompts[0]!.text).toMatch(/^\[SPL handback c1 from p1\]/);
-    view = foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!;
+    expect(cli.prompts[0]!.text).toMatch(/^\[SLP handback c1 from p1\]/);
+    view = foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!;
     expect([view.queued, view.undelivered]).toEqual([[], []]);
   });
 
-  it("fails loudly, naming `spl watch`, when no watcher can relay", async () => {
+  it("fails loudly, naming `slp watch`, when no watcher can relay", async () => {
     const { home, created } = await roomWithWatcher(false);
     await expect(cmd.handback(sandboxed(home, created.members.p1!.paneId), undefined, "c1", "done"))
-      .rejects.toThrow(/cannot reach Herdr.*spl watch/);
+      .rejects.toThrow(/cannot reach Herdr.*slp watch/);
   });
 
   it("does not let the sender redeliver a queued message", async () => {
@@ -337,16 +337,16 @@ describe("round-5 delivery fixes", () => {
     const brief = await cmd.send(as("lead"), undefined, "p1", "brief");
     await acquireLock(join(home, "rooms", "demo", "watch.lock"));
     await cmd.redeliver(sandboxed(home, created.members.lead!.paneId), undefined, brief.seq, true);
-    expect(foldCases(await readEvents({ SPL_HOME: home }, "demo")).get("c1")!.queued).toEqual([brief.seq]);
+    expect(foldCases(await readEvents({ SLP_HOME: home }, "demo")).get("c1")!.queued).toEqual([brief.seq]);
     cli.prompts = [];
-    await watchTick({ env: { SPL_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined }, created, DEFAULT_WATCH);
+    await watchTick({ env: { SLP_HOME: home }, herdr: new Herdr(cli.exec, "herdr"), out: () => undefined }, created, DEFAULT_WATCH);
     expect(cli.prompts.map((p) => p.target)).toEqual([created.members.p1!.paneId]);
   });
 
   it("refuses even a forced redeliver while the watcher is relaying the message", async () => {
     const { home, as } = await started();
     const brief = await cmd.send(as("lead"), undefined, "p1", "brief");
-    await appendEvent({ SPL_HOME: home }, "demo", () => ({ kind: "delivery" as const, ref: brief.seq, ok: false, error: "relaying", stage: "relaying" as const }));
+    await appendEvent({ SLP_HOME: home }, "demo", () => ({ kind: "delivery" as const, ref: brief.seq, ok: false, error: "relaying", stage: "relaying" as const }));
     await expect(cmd.redeliver(as("lead"), undefined, brief.seq, true)).rejects.toThrow(/being relayed/);
   });
 });

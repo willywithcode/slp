@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // Ported from paseo-supervision/server/jev.ts (accepted there). Differences:
-// spl evidence comes from explicit case IDs in the room log, so chronology is
+// slp evidence comes from explicit case IDs in the room log, so chronology is
 // never uncertain and `uncertainRoomMessages` is always empty.
 
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";

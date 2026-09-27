@@ -47,10 +47,10 @@ export function evaluate(s: Snapshot, c: WatchConfig): Alert[] {
       if (!view.undelivered.includes(m.seq) || s.now - Date.parse(m.ts) <= c.undeliveredMs) continue;
       const error = view.errors[m.seq];
       const what = view.queued.includes(m.seq)
-        ? `it is queued for the room watcher but was not relayed. Is \`spl watch --room ${s.room.name}\` running outside any agent sandbox?`
+        ? `it is queued for the room watcher but was not relayed. Is \`slp watch --room ${s.room.name}\` running outside any agent sandbox?`
         : error !== undefined
-        ? `delivery failed (${error}). ${m.from} can retry with \`spl redeliver ${m.seq}\` once the cause is fixed.`
-        : `its delivery outcome is unknown (no confirmation was recorded). Check ${m.to}'s pane; only if it is missing, ${m.from} can run \`spl redeliver --force ${m.seq}\`.`;
+        ? `delivery failed (${error}). ${m.from} can retry with \`slp redeliver ${m.seq}\` once the cause is fixed.`
+        : `its delivery outcome is unknown (no confirmation was recorded). Check ${m.to}'s pane; only if it is missing, ${m.from} can run \`slp redeliver --force ${m.seq}\`.`;
       alerts.push({
         key: `undelivered:${m.seq}`, rule: "undelivered", case: view.id, member: m.to,
         text: `${m.kind} ${view.id} from ${m.from} to ${m.to} (seq ${m.seq}): ${what}`,
@@ -69,7 +69,7 @@ export function evaluate(s: Snapshot, c: WatchConfig): Alert[] {
       if (delivered === undefined || readyFor(peer, delivered) <= c.peerIdleMs) continue;
       alerts.push({
         key: `peer-idle:${view.id}:${m.seq}`, rule: "peer-idle-without-handback", case: view.id, member: peer,
-        text: `${peer} has been idle for over ${minutes(c.peerIdleMs)} since ${m.kind} ${view.id} (seq ${m.seq}) was delivered, without a handback. Check \`spl log ${view.id}\`.`,
+        text: `${peer} has been idle for over ${minutes(c.peerIdleMs)} since ${m.kind} ${view.id} (seq ${m.seq}) was delivered, without a handback. Check \`slp log ${view.id}\`.`,
       });
     }
     // The lead owes a disposition for every handback newer than its own last
@@ -80,7 +80,7 @@ export function evaluate(s: Snapshot, c: WatchConfig): Alert[] {
       if (handedAt === undefined || readyFor(pending.to, handedAt) <= c.leadIdleMs) continue;
       alerts.push({
         key: `lead-idle:${view.id}:${pending.seq}`, rule: "lead-no-disposition", case: view.id, member: pending.to,
-        text: `${pending.to} has been idle for over ${minutes(c.leadIdleMs)} since ${pending.from}'s handback on ${view.id} (seq ${pending.seq}) without replying. A disposition is still pending; check \`spl log ${view.id}\`.`,
+        text: `${pending.to} has been idle for over ${minutes(c.leadIdleMs)} since ${pending.from}'s handback on ${view.id} (seq ${pending.seq}) without replying. A disposition is still pending; check \`slp log ${view.id}\`.`,
       });
     }
   }

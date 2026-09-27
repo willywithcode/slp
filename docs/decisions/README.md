@@ -7,11 +7,12 @@ Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
 
 ## Current Decisions
 
-- [0001](0001-standalone-typescript-tool.md) spl is a standalone TypeScript tool, separate from mustang
+- [0001](0001-standalone-typescript-tool.md) slp is a standalone TypeScript tool, separate from mustang
 - [0002](0002-room-data-outside-repository.md) Room data lives outside the repository
 - [0003](0003-record-before-deliver.md) Record before delivery; identity from the Herdr pane
-- [0004](0004-agent-launch-permissions.md) Agents get permission for `spl` only
+- [0004](0004-agent-launch-permissions.md) Agents get permission for `slp` only
 - [0005](0005-watch-alert-policy.md) Watch alert policy
+- [0006](0006-rename-to-slp.md) Rename spl to slp
 
 ## Add A Decision When
 

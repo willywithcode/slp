@@ -9,19 +9,19 @@ Accepted
 ## Context
 
 mustang forbids parallel control-plane state in a repository; repository plans
-are the durable record of work. spl still needs a message log, delivery state
+are the durable record of work. slp still needs a message log, delivery state
 and (later) alerts and assessments.
 
 ## Decision
 
-All room data lives under `~/.spl/rooms/<room>/` (overridable with
-`SPL_HOME`): `room.json`, append-only `events.jsonl`, `messages/`. spl never
+All room data lives under `~/.slp/rooms/<room>/` (overridable with
+`SLP_HOME`): `room.json`, append-only `events.jsonl`, `messages/`. slp never
 writes into the project repository. Agents may link repository plans from
 briefs; the plan remains the source of truth for the work itself.
 
 ## Alternatives Considered
 
-1. `.spl/` inside the repository: violates mustang's Harness rule.
+1. `.slp/` inside the repository: violates mustang's Harness rule.
 
 ## Consequences
 

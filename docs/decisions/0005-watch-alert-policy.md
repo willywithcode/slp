@@ -8,7 +8,7 @@ Accepted
 
 ## Context
 
-`spl watch` needs defaults for when to alert, where alerts go and whether Jev
+`slp watch` needs defaults for when to alert, where alerts go and whether Jev
 runs. The owner chose them on 2026-09-26.
 
 ## Decision
@@ -27,8 +27,8 @@ runs. The owner chose them on 2026-09-26.
   Herdr notification. Each alert is recorded as an `alert` event keyed by the
   triggering message seq or Herdr state episode, so it fires once per trigger,
   including across watcher restarts.
-- Alerts describe facts and point at `spl log`; they never claim drift.
-- A closing reply (`spl reply --close`) ends every obligation on the case; the
+- Alerts describe facts and point at `slp log`; they never claim drift.
+- A closing reply (`slp reply --close`) ends every obligation on the case; the
   first live run (2026-09-26) showed that treating an "Accepted" reply as a new
   request raised a false `peer-idle-without-handback` alert.
 - An alert is recorded before delivery and retried every watch pass (up to 5
@@ -39,7 +39,7 @@ runs. The owner chose them on 2026-09-26.
   another host is never displaced by age (its liveness cannot be checked). Pending alerts are
   delivered before any Jev request, and a pass makes at most 3 Jev requests.
 - A watcher is bound to one room instance (workspace ID and creation time):
-  it stops when that room is archived by `spl down` or replaced by a new room
+  it stops when that room is archived by `slp down` or replaced by a new room
   with the same name; the log is never recreated for an archived room.
 - Under the per-pass Jev budget, the oldest unassessed case state goes first.
   A `jev-drift` alert is raised only if the judged state is still the case's

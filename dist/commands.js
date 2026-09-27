@@ -4,26 +4,26 @@ import { foldCases } from "./cases.js";
 import { Herdr, HerdrError } from "./herdr.js";
 import { acquireLock, appendEvent, isMessage, lockHeldByLiveProcess, nextCaseId, readEvents } from "./log.js";
 import { envelope, onboarding } from "./protocol.js";
-import { loadRoom, MEMBER_NAME, resolveRoom, resolveSelf, RoomGoneError, roomDir, saveRoom, splHome, SplError, } from "./room.js";
+import { loadRoom, MEMBER_NAME, resolveRoom, resolveSelf, RoomGoneError, roomDir, saveRoom, slpHome, SplError, } from "./room.js";
 // Command-line arguments are limited (~32k chars on Windows). Longer messages
 // are stored in the room and the target is pointed at the file instead.
 export const INLINE_LIMIT = 6_000;
 // ---------------------------------------------------------------- up
 /**
- * Native arguments that let each agent kind run `spl` without an approval
- * dialog per call, which would leave it `blocked`. Only `spl` is allowed;
+ * Native arguments that let each agent kind run `slp` without an approval
+ * dialog per call, which would leave it `blocked`. Only `slp` is allowed;
  * everything else keeps the agent's normal permission behaviour.
  */
 export function agentArgs(kind, env) {
-    // spl.cmd too: on Windows an agent may call the .cmd shim explicitly.
+    // slp.cmd too: on Windows an agent may call the .cmd shim explicitly.
     if (kind === "claude")
-        return ["--allowedTools", "Bash(spl *)", "Bash(spl.cmd *)"];
+        return ["--allowedTools", "Bash(slp *)", "Bash(slp.cmd *)"];
     // Codex: its own process, not the shared background server, so commands
     // see this pane's HERDR_PANE_ID; workspace-write (Codex's normal mode for
     // trusted projects) so the Peer can edit code and --add-dir is honoured for
     // the room log. A read-only default makes Codex exit on --add-dir.
     if (kind === "codex")
-        return ["--no-daemon", "--sandbox", "workspace-write", "--add-dir", splHome(env)];
+        return ["--no-daemon", "--sandbox", "workspace-write", "--add-dir", slpHome(env)];
     return [];
 }
 /** Startup screens that only the human may answer (Claude Code, Codex). */
@@ -42,8 +42,8 @@ export async function up(deps, o) {
             throw error;
         if (await loadRoom(deps.env, o.room))
             throw new SplError(`Room "${o.room}" already exists`);
-        throw new SplError(`Room "${o.room}" is being created by another \`spl up\`, or an earlier one failed. ` +
-            `If no other \`spl up\` is running, remove ${dir} and retry.`);
+        throw new SplError(`Room "${o.room}" is being created by another \`slp up\`, or an earlier one failed. ` +
+            `If no other \`slp up\` is running, remove ${dir} and retry.`);
     }
     let workspaceId = null;
     try {
@@ -51,11 +51,11 @@ export async function up(deps, o) {
     }
     catch (error) {
         // Nothing usable was saved: free the name. A created workspace is left
-        // for the human to inspect or close; spl only reports it.
+        // for the human to inspect or close; slp only reports it.
         if (!(await loadRoom(deps.env, o.room).catch(() => null)))
             await rm(dir, { recursive: true, force: true });
         if (workspaceId)
-            deps.out(`spl up failed after creating workspace ${workspaceId}; close it with \`herdr workspace close ${workspaceId}\`.`);
+            deps.out(`slp up failed after creating workspace ${workspaceId}; close it with \`herdr workspace close ${workspaceId}\`.`);
         throw error;
     }
 }
@@ -66,9 +66,9 @@ async function createRoom(deps, o, created) {
         ...o.peers.map((kind, i) => ({ name: `p${i + 1}`, role: "peer", kind })),
         ...(o.supervisor ? [{ name: "sup", role: "supervisor", kind: o.supervisor }] : []),
     ];
-    const paneEnv = { SPL_ROOM: o.room };
+    const paneEnv = { SLP_ROOM: o.room };
     // Layout: lead top-left, supervisor below it, peers stacked on the right.
-    const ws = await deps.herdr.workspaceCreate({ cwd, label: `spl:${o.room}`, env: { SPL_ROOM: o.room } });
+    const ws = await deps.herdr.workspaceCreate({ cwd, label: `slp:${o.room}`, env: { SLP_ROOM: o.room } });
     created(ws.workspaceId);
     deps.out(`workspace ${ws.workspaceId} created`);
     const panes = new Map([["lead", ws.rootPaneId]]);
@@ -112,11 +112,11 @@ async function createRoom(deps, o, created) {
         try {
             const below = room.members.sup?.paneId ?? room.members.lead.paneId;
             const pane = await deps.herdr.paneSplit(below, { direction: "down", cwd, env: paneEnv });
-            await deps.herdr.paneRun(pane, `spl watch --room ${o.room}`);
+            await deps.herdr.paneRun(pane, `slp watch --room ${o.room}`);
             deps.out(`watch: running in ${pane}`);
         }
         catch (error) {
-            deps.out(`watch: NEEDS ATTENTION (${describe(error)}). Run \`spl watch --room ${o.room}\` in any terminal.`);
+            deps.out(`watch: NEEDS ATTENTION (${describe(error)}). Run \`slp watch --room ${o.room}\` in any terminal.`);
         }
     }
     return room;
@@ -172,7 +172,7 @@ export async function down(deps, name, force) {
         throw new SplError(`Room "${name}" does not exist`);
     const pane = deps.env.HERDR_PANE_ID;
     if (pane && Object.values(room.members).some((m) => m.paneId === pane)) {
-        throw new SplError(`Refusing to close the room from inside room ${name}; run \`spl down ${name}\` from another terminal.`);
+        throw new SplError(`Refusing to close the room from inside room ${name}; run \`slp down ${name}\` from another terminal.`);
     }
     try {
         await deps.herdr.workspaceClose(room.workspaceId);
@@ -181,7 +181,7 @@ export async function down(deps, name, force) {
     catch (error) {
         if (!force) {
             throw new SplError(`Could not close workspace ${room.workspaceId}: ${describe(error)}. ` +
-                `If it is already gone, run \`spl down ${name} --force\` to archive the room anyway.`);
+                `If it is already gone, run \`slp down ${name} --force\` to archive the room anyway.`);
         }
         deps.out(`workspace ${room.workspaceId} not closed (${describe(error)}); archiving anyway (--force)`);
     }
@@ -277,11 +277,11 @@ export async function redeliver(deps, roomFlag, seq, force) {
         throw new SplError(`Message ${seq} is being relayed by the room watcher right now; check ${event.to}'s pane in a minute.`);
     }
     if (view?.queued.includes(seq)) {
-        throw new SplError(`Message ${seq} is queued; the room watcher will deliver it (\`spl watch --room ${self.room.name}\` must be running).`);
+        throw new SplError(`Message ${seq} is queued; the room watcher will deliver it (\`slp watch --room ${self.room.name}\` must be running).`);
     }
     if (!force && !view?.failed.includes(seq)) {
         throw new SplError(view?.unconfirmed.includes(seq)
-            ? `Message ${seq}'s delivery outcome is unknown; it may already be in ${event.to}'s pane. Check there first, then use \`spl redeliver --force ${seq}\` if it is missing.`
+            ? `Message ${seq}'s delivery outcome is unknown; it may already be in ${event.to}'s pane. Check there first, then use \`slp redeliver --force ${seq}\` if it is missing.`
             : `Message ${seq} was already delivered to ${event.to}; use --force to send it again.`);
     }
     await deliver(deps, self.room, event);
@@ -321,8 +321,8 @@ async function deliver(deps, room, event) {
     await appendEvent(deps.env, room.name, () => ({ kind: "delivery", ref: event.seq, ok: false, error: reason }), room);
     throw new SplError(`${event.kind} ${event.case} was recorded as seq ${event.seq} but NOT delivered to ${event.to}: ${reason}. ` +
         (unreachable(error)
-            ? `This terminal cannot reach Herdr (an agent sandbox?). Start \`spl watch --room ${room.name}\` outside the sandbox so it can relay messages, then run \`spl redeliver ${event.seq}\`.`
-            : `Fix the cause, then run \`spl redeliver ${event.seq}\`.`));
+            ? `This terminal cannot reach Herdr (an agent sandbox?). Start \`slp watch --room ${room.name}\` outside the sandbox so it can relay messages, then run \`slp redeliver ${event.seq}\`.`
+            : `Fix the cause, then run \`slp redeliver ${event.seq}\`.`));
 }
 /**
  * Deliver one message queued by a sender that could not reach Herdr. Called
@@ -368,7 +368,7 @@ async function render(deps, room, event) {
     let body = event.text;
     if (body.length > INLINE_LIMIT) {
         const dir = join(roomDir(deps.env, room.name), "messages");
-        // Not recursive: if `spl down` archived the room meanwhile, fail instead of
+        // Not recursive: if `slp down` archived the room meanwhile, fail instead of
         // recreating the room directory.
         await mkdir(dir).catch((error) => {
             if (error.code === "ENOENT")
