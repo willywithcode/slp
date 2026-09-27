@@ -1,149 +1,121 @@
 # slp
 
-Supervisor / Lead / Peer rooms for coding agents on top of [Herdr](https://herdr.dev).
+A Supervisor, Leads and Peers working on your repository, as coding agents
+in your own [Herdr](https://herdr.dev) workspace.
 
-`slp up` opens a Herdr workspace with a Lead, several Peers and an optional
-Supervisor. Agents then talk to each other **only** through `slp`, which
-records every message in an append-only room log before delivering it with
-`herdr agent prompt`. `slp watch` turns that log plus Herdr's agent states into
-reminders for the Supervisor and the human, and can optionally ask Jev to judge
-each case's communication.
+You talk to one agent, the **Supervisor**. It settles with you what the work
+should do, writes your answers into the project's concept, and opens one
+**lane** per outcome. Each lane gets a **Lead** in its own tab, which briefs
+**Peers** (the only seats that write code), judges what they hand back, can
+ask a read-only **Reviewer** for a clean-context look, and reports the lane
+ready. A **Critic** reads each lane once against your own words. slp runs the
+project's tests as the gate and lands a finished lane on your base branch as
+one squash commit. It never pushes.
 
-Status: v0.2 (see `docs/plans/completed/spl-v0.2.md`). Verified by offline
-tests on Windows, macOS and Ubuntu (CI) and by live Herdr runs on Windows with
-Claude and Codex agents.
+Seats talk only through `slp`: every message is a letter, recorded in the
+project's ledger before it is delivered through Herdr. A watcher (code, not a
+seat) delivers letters to busy seats, runs gates and landings, reads the
+agents' transcripts for trouble, and keeps work moving. Jev, a typed
+classifier, is optional: without it every decision point takes a code
+fallback.
+
+Status: v0.3. Verified by offline tests on Windows, macOS and Ubuntu (CI) and
+by live Herdr runs on Windows with Claude Code and Codex seats.
 
 ## Requirements
 
 - Node.js 22+ on Windows, macOS or Linux
 - Herdr on `PATH` (Herdr's Windows support is still beta)
-- The agent CLIs you want to run (`claude`, `codex`, ...)
+- A git repository to work on
+- Claude Code (`claude`) for the Supervisor, Leads, Reviewers and Critics;
+  Codex (`codex`) and/or `agy` for Peers. Accounts and models per role are
+  set in `~/.slp/config.json` (`slp config` prints its path).
 
 ## Install
 
-No clone needed; the built CLI is committed in `dist/`:
+The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/heads/main.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.0.tar.gz
 slp help
 ```
 
-This puts `slp` on `PATH` (`slp.cmd` on Windows). Use the tarball URL, not
-`github:willywithcode/slp`: npm's global install from git links to a temporary
-clone that is deleted afterwards. Update with the same command; remove with
-`npm uninstall -g slp`. `slp` must be
-on `PATH` inside Herdr panes, because the agents run it.
-
-To work on slp itself: clone, `npm install`, `npm test`, `npm run build`
-(commit the rebuilt `dist/`; CI checks it matches the sources), `npm link`.
+This puts `slp` on `PATH` (`slp.cmd` on Windows); the agents run it from their
+panes, so it must be on `PATH` inside Herdr. To work on slp itself: clone,
+`npm install`, `npm test`, `npm run build` (commit the rebuilt `dist/`; CI
+checks it), `npm link`.
 
 ## Use
 
-The full workflow, when to use slp at all, what you do while a room runs,
-an alert runbook and troubleshooting are in
-[docs/product/workflow.md](docs/product/workflow.md). In short, from a
-terminal inside Herdr, in the project directory:
+In a Herdr pane, inside your repository:
 
 ```sh
-slp up feature-x --lead claude --peers codex,codex --supervisor claude --watch
+slp start
 ```
 
-This creates workspace `slp:feature-x` (Lead top-left, Supervisor below it,
-Peers on the right, watcher at the bottom), starts each agent with permission
-to run `slp` only (ADR 0004), and tells it to run `slp guide`. If an agent
-stops at a first-run dialog (e.g. "trust this folder?"), `slp up` never answers
-it for you: it prints what to paste once you have resolved it.
+The Supervisor opens to your right and the watcher below you. Talk to the
+Supervisor in its pane. Each lane opens in its own tab; watch it there or with
+`slp status`. When you are done: `slp stop`.
 
-Run rooms with `--watch` when Peers are sandboxed (Codex): a sandbox cannot
-reach Herdr, so their messages are queued and the watcher relays them within
-seconds. Agents still ask you before running anything other than `slp`.
-Then give the task to the Lead in its pane. When done, from a terminal outside
-the room: `slp down feature-x`.
+What only you do:
 
-| Command | Who | What |
-| --- | --- | --- |
-| `slp send <peer> [TEXT \| - \| --file PATH]` | Lead | Brief a Peer; opens case `cN` |
-| `slp reply <case> <peer> [...]` | Lead | Ask for more on a case; any Peer may be addressed (e.g. a reviewer) and then owes a handback |
-| `slp reply <case> <peer> [...] --close` | Lead | Accept and close the case: nobody owes anything |
-| `slp handback <case> [...]` | Peer | Report to the Lead on a case the Lead addressed to you |
-| `slp redeliver [--force] <seq>` | sender | Retry a message Herdr refused |
-| `slp status` / `slp log <case>` | anyone | Cases, who owes what, full history |
-| `slp guide [role]` / `slp whoami` | agents | Role protocol / identity |
-| `slp watch [--once] [--jev off\|shadow\|alert]` | human | Reminders and optional Jev assessment |
-| `slp up ... [--watch]` / `slp down <room> [--force]` | human | Open / close and archive a room |
+- Answer startup dialogs (folder trust) and permission prompts in any pane.
+  slp never answers them, never types into a pane that shows one, and tells
+  you when one is waiting.
+- Decide what the project does. The Supervisor asks you when it matters and
+  keeps your answers in the concept (`~/.slp/projects/<id>/CONTEXT.md`).
+- Agree, or not, when slp holds a landing for you (a high-risk lane without a
+  lane review, or a diff that could lose stored data).
+- Push. slp lands locally and stops there.
 
-Identity is the room member whose pane matches `HERDR_PANE_ID` (and
-`HERDR_WORKSPACE_ID`), which Herdr injects into every pane; no name an agent
-chooses is trusted. Only the Lead briefs and replies; a Peer hands back only on
-cases the Lead addressed to it. This guards against mistakes, not against a
-hostile local process, which could forge those variables.
+Your commands:
 
-## Watch
-
-`slp watch` polls `herdr agent list` (every 10 s, or once with `--once`) and
-raises each alert once per trigger (ADR 0005):
-
-| Rule | When |
+| Command | What it does |
 | --- | --- |
-| `peer-idle-without-handback` | a Peer idle/done for 3 min after a brief/reply it has not answered |
-| `blocked` | any member on an approval/question dialog for 3 min |
-| `lead-no-disposition` | a handback newer than the Lead's last message, Lead idle 10 min |
-| `undelivered` | a message without a successful delivery for 3 min |
-| `member-gone` | a member's pane no longer hosts its agent kind (an agent whose kind Herdr cannot report is treated as unknown, not as the member) |
-| `jev-drift` | `--jev alert` only: Jev confidently judged drift |
+| `slp start` | Supervisor beside you, watcher below |
+| `slp status` | seats, lanes, tasks, open asks, waiting letters, landings |
+| `slp incidents`, `slp ack I3 useful\|noise\|unknown` | what the watch found; your marks calibrate Jev |
+| `slp calibrate [--dry-run]` | Jev thresholds from the marks |
+| `slp intro <seat>` | resend a seat's first letter (after you answered its dialog, if no watcher ran) |
+| `slp redeliver <seq> [--force]` | send a letter again |
+| `slp watch` | run a watcher yourself (normally `slp start` does) |
+| `slp config` | path of the accounts, models, watch and Jev settings |
+| `slp stop [--force]` | close every seat |
 
-Alerts go to the Supervisor pane (if any) and a Herdr notification, and are
-retried for up to 5 rounds until one channel succeeds; pending alerts are
-delivered before any Jev work. They are reminders, not verdicts. Only one
-watcher runs per room (a second one exits with the first one's pid), and a
-watcher stops by itself once `slp down` has archived its room (or a new room
-reused its name).
+Seats see their own verbs with `slp guide`.
 
-Jev is **off** by default. `--jev shadow` records an `assessment` for each
-case state (after a handback, and after each later message) without alerting;
-`--jev alert` also alerts on confident drift, including a drift recorded
-earlier in shadow mode for a case that has not changed since. At most 3 Jev
-requests are made per pass, oldest pending case state first. Both need `JEV_API_KEY`;
-`JEV_MODEL` (pinned, default `jev-1.13.0`) and `SLP_ALERT_CONFIDENCE`
-(0.5–1, default 0.9) are optional. Jev receives the full brief, handback and
-later Lead messages of the case. A failed request is recorded as `unknown`
-and not retried.
+The full workflow, a runbook for what to do when the watch pings you, and
+troubleshooting: [docs/product/workflow.md](docs/product/workflow.md).
 
-## Data
+## Accounts and models
 
-Everything lives in `~/.slp/rooms/<room>/` (override with `SLP_HOME`), never in
-your repository (ADR 0002):
+`~/.slp/config.json` (written with defaults on first use) names launchers
+(which agent, on which account) and, per role, the launchers, model and
+effort. Several launchers for one role rotate (e.g. Peers across Codex
+accounts). A Lead picks a Peer preset per task (`sol`, `luna`, `flash`). An
+account that runs out is reported to the Supervisor, which may move the seat
+with `slp move-seat <seat> <launcher>`; the session resumes there. slp never
+reads account secrets: a launcher only names environment variables and a
+preparation command that the seat's own shell runs (ADR 0011).
 
-- `room.json`: members, roles, agent kinds and pane IDs
-- `events.jsonl`: append-only `brief`, `handback`, `reply`, `delivery`,
-  `alert` and `assessment` events
-- `messages/`: bodies longer than 6000 characters, delivered as a file pointer
-- `watch.json`: the watcher's last observation of each member
+One-time setup per account: open each agent once in the repository and
+answer its folder-trust dialog; on Windows, open each Codex account once so it
+can set up its sandbox (a Codex seat whose sandbox is not set up asks you to
+approve every command).
 
-Appends are serialized by a lock directory that records its owner; a lock is
-only taken over when its owner process is gone. A message Herdr refused is
-marked `UNDELIVERED` and can be retried with `slp redeliver <seq>`. A message
-from a sender that cannot reach Herdr is `QUEUED` until the watcher relays it.
-A message with no recorded outcome (the sender died mid-delivery) is
-`UNCONFIRMED`: it may already be in the target pane, so retrying needs
-`--force` after checking.
-`slp down` moves the room to `rooms/.archive/`.
+## Jev (optional)
 
-## Limits
+Set `JEV_API_KEY` (TypeSafe) or `OPENROUTER_API_KEY` (OpenRouter) in the
+environment of the terminal that runs `slp start`. Jev starts in shadow mode
+(`"jev": { "mode": "shadow" }`): its readings are recorded and shown as
+unmailed incidents that you and the seats mark. `slp calibrate` turns the
+marks into thresholds; with `"mode": "on"` a reading acts only above its
+threshold. Jev informs, routes, nudges or raises incidents; it never accepts
+work or lands anything. See [docs/product/jev-decisions.md](docs/product/jev-decisions.md).
 
-- Messages that bypass `slp` (typing into a pane, calling herdr directly) are
-  invisible. The guide forbids it; nothing can enforce it.
-- Case states (`awaiting-handback`, `awaiting-lead`, `lead-replied`, `closed`)
-  are facts about the last message, not judgments of quality.
-- Herdr has no idempotent prompt, so an unconfirmed delivery cannot be
-  resolved automatically.
+## Design
 
-## Develop
+Decisions are in [docs/decisions](docs/decisions); the v0.3 plan and its
+progress in [docs/plans](docs/plans).
 
-```sh
-npm run typecheck
-npm test             # fake herdr, fake clock and fake fetch; nothing live
-npm run build
-```
-
-CI runs the same on Windows, macOS and Ubuntu with Node 22 and 24.
+License: Apache-2.0.

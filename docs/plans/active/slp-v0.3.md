@@ -141,13 +141,30 @@ actionable findings, docs and ADRs current.
 ## Progress
 
 - [x] 0. Rename spl → slp (ADR 0006); GitHub repository renamed.
-- [ ] 1. Foundations
-- [ ] 2. Lanes and tasks
-- [ ] 3. Reviewer and Critic
-- [ ] 4. Watch v2
-- [ ] 5. Jev sensor and calibrate
-- [ ] 6. Jev loop control
-- [ ] 7. Release
+- [x] 1. Foundations: project ledger, roles as data, launchers and accounts,
+  seats through `herdr agent start`, letters, `slp start`/`stop`, verbs
+  with role permissions. Live: the Supervisor opened, was introduced and
+  used `slp` without prompts.
+- [x] 2. Lanes and tasks: lanes with write sets and branches (checkout, then
+  worktrees), lane and parallel tasks, asks with reminders, gate and squash
+  landing by the watcher. Live: lane → Codex task → hand-back → accept →
+  ready → gate → landed as one commit on main.
+- [x] 3. Reviewer and Critic: read-only seats; the Critic reads the Human's
+  own words from the Supervisor's transcript. Live: the Critic found a real
+  ambiguity; the Supervisor amended the lane.
+- [x] 4. Watch v2: Claude Code and Codex transcript readers, facts, incident
+  book (shadow mail), account problems to the Supervisor, `slp move-seat`.
+  Tested on transcript samples shaped like recorded ones.
+- [x] 5. Jev sensor and `slp calibrate` (fake Jev in tests; no key used).
+- [x] 6. Jev loop control with code fallbacks first (turn ends, asks, briefs,
+  hand-backs, lanes, Critic first pass, landing holds, retrospective).
+- [ ] 7. Release: v0.3.0 tag, mustang skill `slp` (harness-core PR #1),
+  docs.
+
+Open for the owner: a live run of parallel Codex Peers on accounts acc2 and
+acc3 waits on the one-time Codex Windows sandbox setup for those accounts
+(their commands otherwise ask for approval); automated approval was refused
+by the owner's permission policy (ADR 0014).
 
 ## Decisions
 
@@ -162,6 +179,19 @@ actionable findings, docs and ADRs current.
   without Jev; fallbacks exist before any Jev question.
 - 2026-09-27: The local folder is still named `spl` (held open by another
   process); rename when free.
+- 2026-09-27: Live runs: never deliver into a startup dialog (Herdr calls
+  Codex idle at its trust screen); a seat's first letter carries its brief;
+  `slp context`, `slp diff`, `slp test` so seats need no prompts; one slp
+  command per call (ADR 0014).
+- 2026-09-27: Independent reviews (general-purpose and Codex): landing pins
+  the tested base; landing recorded before teardown; worktrees with work are
+  kept; reservations under the ledger lock; seats cannot run the Human's
+  commands; refused letters retried (ADR 0015 for the landing rules).
+- 2026-09-27: Landing holds for high-risk lanes without a lane review and for
+  migrations or destructive SQL; the Human agrees via `--over-risk`
+  (ADR 0015).
+- 2026-09-27: No `plan-tasks` verb: a Lead plans in its own context and
+  briefs task by task; the durable plan, when needed, is the repository's.
 
 ## Validation
 

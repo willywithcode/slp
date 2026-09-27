@@ -1,219 +1,182 @@
 # Workflow: working with and without slp
 
 Both ways of working follow the same repository rules (`AGENTS.md` and
-`docs/WORKFLOW.md` from mustang). slp adds a coordination layer for several
-agents on top of them; it never replaces the repository as the source of
-truth and never writes into it (ADR 0002).
+`docs/WORKFLOW.md` from mustang). slp adds a team on top of them; its own
+state lives outside the repository (`~/.slp`), and the repository changes
+only through Peers' commits and slp's squash landings.
 
 ## Which one to use
 
 | Situation | Use |
 | --- | --- |
 | A question, a review, a small bounded change, work you want to follow step by step | One agent, no slp |
-| Work that splits into independent parts that can run in parallel | slp |
-| Work that needs a second agent to review the first one's result | slp |
-| Long work you do not want to watch continuously | slp with `--watch` |
+| Work with a clear outcome you would rather hand off than drive | slp |
+| Work that splits into parts that can be built in parallel | slp |
+| Work that deserves a second, clean-context look before it lands | slp |
 
-slp runs several agents at once, so it costs more agent usage than a single
-session. Several Peers editing the same checkout can collide; give each room
-its own git worktree (`slp up api --cwd ../repo-api-worktree`) when their
-write scopes overlap.
+A team costs more agent usage than one session. The Supervisor tells you when
+a request is small enough for one session.
 
 ## Without slp: one agent
 
-You talk to one agent (for example Claude Code in a terminal) and it follows
-`docs/WORKFLOW.md`:
+You talk to one agent and it follows `docs/WORKFLOW.md`: read-only requests
+change nothing; bounded changes are made, checked and reported; durable work
+keeps a plan in `docs/plans/active/`; open policy choices come back to you.
 
-1. **Read-only request** (question, explanation, review): it inspects only
-   what it needs and changes nothing.
-2. **Bounded change**: it reads the affected code and its proof, makes the
-   smallest change, runs the checks, and reports outcome, changes, evidence
-   and remaining risks.
-3. **Durable work** (spans sessions, has dependencies, needs recovery): it
-   keeps one plan in `docs/plans/active/`, works in verified steps, and moves
-   the plan to `docs/plans/completed/` after validation.
-4. **Open policy choice**: it stops and asks you.
-
-An agent can start other agents through the `herdr` skill, but those messages
-are not logged, nobody watches them, and there is no brief/handback contract.
-When you need that, use slp.
-
-## With slp: a room of roles
+## With slp: the team
 
 ```
-You ──task──▶ Lead ──slp send──────────▶ Peer p1 (does the work)
-               ▲  ◀──slp handback──────────┘
-               │
-               ├──slp reply───────────▶ Peer p2 (e.g. reviews p1's change)
-               │  ◀──slp handback──────────┘
-               └──slp reply --close ──▶ (case closed, nothing owed)
-
-slp watch ──alerts──▶ Supervisor ──reports──▶ You
+You ⇄ Supervisor ──open-lane──▶ Lead (lane tab) ──start-task──▶ Peer ─┐
+        ▲    ▲                    │  ▲ ◀────────── done (hand-back) ───┘
+        │    │                    │  └─ accept / rework / cut
+        │    │                    ├──start-review──▶ Reviewer (read-only)
+        │    │                    └──report ready──▶ watcher: gate ─┐
+        │    └──────────── REPORT (with the gate) ◀────────────────┘
+        │    close-lane --land ──▶ watcher: squash onto base (never pushed)
+        └── Critic reads each lane once against your own words
 ```
 
-| Role | Does | Talks to |
+| Seat | Does | Never |
 | --- | --- | --- |
-| You | Give the task, approve commands, answer dialogs, decide | Lead, Supervisor |
-| Lead | Plans, briefs Peers, checks every handback, closes cases | Peers (through slp), you |
-| Peer | One bounded brief at a time; reports with evidence | Lead (through slp) |
-| Supervisor | Reviews the communication, never the artifacts; relays alerts | You |
-| Watcher (`slp watch`) | Relays queued messages, raises reminders | Supervisor, Herdr notification |
+| You | Say what you want; answer dialogs and prompts; decide the concept and holds; push | — |
+| Supervisor | Settles the request with you, keeps the concept, opens and closes lanes, answers Leads | Write code, run tests, judge work inside a lane |
+| Lead (one per lane, own tab) | Plans the lane, briefs Peers, judges hand-backs, asks for reviews, reports ready | Write code, widen the lane |
+| Peer | One task: builds it in its owned paths, commits, hands back with evidence | Push, merge, touch paths it does not own |
+| Reviewer | Reads one change (or the lane) with clean context and reports findings | Change anything |
+| Critic | Reads a lane once against your words and the concept | Change anything |
+| Watcher (code) | Delivers letters, runs gates and landings, reads transcripts, raises incidents, nudges | Answer dialogs, accept work, push |
 
-### 1. Once per machine
+### 1. Once per machine and account
 
-1. Node.js 22+, Herdr, and the agent CLIs you use (`claude`, `codex`, ...).
-2. `npm install -g https://github.com/willywithcode/slp/archive/refs/heads/main.tar.gz`
-3. For repositories that use mustang: `mustang update --apply` brings in the
-   `slp` skill, so agents recognise room messages on their own.
+1. Node.js 22+, Herdr, Claude Code, Codex (and `agy` if you use the flash
+   preset); `slp` installed (see README).
+2. `slp config` writes `~/.slp/config.json`; adjust launchers, models and
+   efforts per role if the defaults are not yours.
+3. For each account a seat may use: open that agent once in the repository
+   and answer its folder-trust dialog. On Windows, open each Codex account once
+   so it sets up its sandbox; until then its Peers ask you to approve every
+   command.
+4. Repositories that use mustang get the `slp` skill with
+   `mustang update --apply`.
 
-### 2. Open a room
+### 2. Start
 
-From a terminal inside Herdr, in the project directory:
+In a Herdr pane, in the repository: `slp start`. The watcher opens below you
+and the Supervisor to your right, then introduces itself. `slp start` detects
+the project's test command as the gate (`npm test`, `cargo test`, `go test`,
+`pytest`, ...); the Supervisor can change it (`slp set-project --gate`).
 
-```sh
-slp up myroom --watch
-# defaults: --lead claude --peers codex,codex --supervisor claude
-```
+### 3. Ask for what you want
 
-`slp up`:
+Talk to the Supervisor as you would to one agent. It asks you what only you
+can decide (what the project does, how it behaves) with its recommendation,
+and decides the rest itself. It then either says one session is enough, or
+opens a lane: an outcome, checkable acceptance, what is out of scope, and a
+write set (the paths the lane may change). Your own words go with the lane;
+a Critic compares the two once and tells the Supervisor where they may differ.
 
-- creates the Herdr workspace `slp:myroom` (Lead top-left, Supervisor below,
-  Peers on the right, watcher at the bottom);
-- starts each agent with permission to run `slp` only (ADR 0004); every other
-  command still asks you;
-- sends each agent a short onboarding message telling it to run `slp guide`.
+### 4. How a lane runs
 
-If a line says `NEEDS ATTENTION`, the agent is waiting for you, usually on a
-first-run "trust this folder?" dialog. slp never answers such a dialog.
-Answer it in that pane yourself, then paste the onboarding text `slp up`
-printed for that agent.
+- The first lane works in your checkout on branch `lane/L1-...` (it must be
+  clean); later lanes get their own worktree under `~/.slp`.
+- The Lead briefs Peers with outcomes, acceptance and owned paths. Tasks in
+  the lane's copy run one at a time; `--parallel` tasks get their own copy and
+  are merged into the lane when accepted.
+- A Peer commits on its branch and hands back: outcome, a summary against
+  each acceptance item, the checks it ran, what is left. slp adds the commits,
+  the changed files, anything outside its owned paths, and a review hint for
+  large changes.
+- The Lead judges by the record (`slp diff`, `slp test`) and accepts, sends
+  it back with what to change, or cuts it. A review can come first.
+- `slp report ready` makes the watcher run the gate; the Supervisor gets the
+  report with the result. It closes the lane with `slp close-lane L1 --land`:
+  the watcher merges the base in, runs the gate again, and lands one squash
+  commit on the base branch. Your checkout returns to the base branch.
+- slp holds a landing for you when the lane is high risk (auth, payments,
+  migrations, ...) and had no review of the whole lane, or its diff changes
+  migrations or adds destructive SQL. The Supervisor shows you why; it lands
+  only with your agreement (`--over-risk --reason "the Human agreed: ..."`).
 
-Use `--watch` whenever Peers run in a sandbox (Codex does): a sandbox cannot
-reach Herdr, so their messages are queued and the watcher delivers them.
+### 5. How letters travel
 
-### 3. Give the task to the Lead
+Every letter is written to the project's ledger before delivery (ADR 0003).
+A letter to a seat that is busy, or that shows a startup dialog, waits; the
+watcher delivers everything waiting for a seat in one message when it is
+free. A seat's first letter carries its introduction and its brief together.
 
-Type the task in the Lead's pane, as you would with a single agent. State
-the outcome and any limits (for example "do not commit"). For durable work
-the Lead keeps the repository plan in `docs/plans/active/` as usual; briefs
-link to it.
-
-### 4. How a case runs
-
-Each `slp send` opens a case (`c1`, `c2`, ...). The obligations for each
-message are printed by `slp guide`:
-
-| Step | Command | Must contain |
+| In `slp status` | Meaning | What to do |
 | --- | --- | --- |
-| Brief (Lead → Peer) | `slp send p1 - <<'EOF' ... EOF` | Observable outcome, write scope or read-only, constraints, evidence required, when to come back early |
-| Handback (Peer → Lead) | `slp handback c1 - <<'EOF' ... EOF` | Outcome, changed paths, evidence (commands and results), complete / missing / failed / unverified, what the Peer still holds |
-| Ask for more | `slp reply c1 p2 "..."` | A specific request (evidence, a decision, a review); the addressed Peer then owes a handback |
-| Accept and close | `slp reply c1 p1 "..." --close` | The disposition; nobody owes anything afterwards |
+| (not listed) | Delivered | Nothing |
+| `queued` | Waiting for the seat, or sent from a sandbox | Nothing; the watcher delivers it |
+| `relaying` | The watcher is delivering it | Nothing |
+| `failed` | Herdr refused it, a dialog was on screen with no watcher, or it was pasted but not submitted | Read the error; resolve it; `slp redeliver <seq>` (a paste left unsent: submit it in that pane instead) |
+| `unconfirmed` | No outcome recorded | Check the seat's pane; if missing, `slp redeliver --force <seq>` |
 
-"OK", "DONE" or silence never close a case; only `--close` does. A handback on
-a closed case reopens it. Long messages go through stdin (`-`); a `--file`
-draft belongs in a temporary directory, never in the repository.
+### 6. Your part while the team runs
 
-Case states in `slp status`:
+- **Dialogs and prompts.** Only you answer them. A seat waiting on one for
+  3 minutes gets you a Herdr notification and its superior a note.
+- **Holds.** Answer the Supervisor when it brings you a held landing.
+- **Incidents.** The watch reads the Leads' and Peers' transcripts. What it
+  finds is recorded (`slp incidents`); pages (destructive commands) always
+  notify you; account problems always reach the Supervisor. Mailing other
+  incidents to the Lead or Supervisor is off until you turn on
+  `"watch": { "mail": true }` in the config.
+- **Do not type into seats' panes** or message them through Herdr: that
+  bypasses the ledger, the watch and the team's authority.
 
-| State | Meaning | Next |
+### 7. When the watch pings you
+
+| You see | Usually means | Do |
 | --- | --- | --- |
-| `awaiting-handback` | A Peer owes a report | The Peer works |
-| `awaiting-lead` | A handback waits for a disposition | The Lead replies or closes |
-| `lead-replied` | The Lead asked for more | The addressed Peer works |
-| `closed` | Accepted | Nothing |
+| "X needs you" / "X waits on you" | A startup dialog or permission prompt in X's pane | Answer it there; its letters follow |
+| "X needs a look" (page) | X ran a destructive command | Read X's pane and the incident; tell the Supervisor what to do |
+| "X account problem" | X's account hit a limit or logged out | The Supervisor may `slp move-seat X <launcher>`; or log in again |
+| "L1 held for you" | A landing waits for your agreement | Read the reason with the Supervisor; agree or not |
+| "L1 landed" | One squash commit on the base branch | Review, then push when you want |
+| "letters to X not submitted" | Text sits in X's input box | Press Enter in X's pane if the text is right |
 
-### 5. How messages travel
+Incidents are readings, not verdicts. Mark them (`slp ack I3 useful|noise`):
+the marks are how Jev earns thresholds.
 
-Every message is written to the room log (`~/.slp/rooms/<room>/`) before it is
-delivered to the target's pane (ADR 0003). If the target does not start
-working and still shows unsent pasted text, slp presses Enter once more.
+### 8. Optional: Jev
 
-| Mark in `slp status` | Meaning | What to do |
-| --- | --- | --- |
-| (none) | Delivered | Nothing |
-| `QUEUED` | The sender could not reach Herdr (sandbox) | Nothing; the watcher delivers it within seconds |
-| `UNDELIVERED` | Herdr refused it (e.g. the target is on a dialog) | Resolve the cause; the sender runs `slp redeliver <seq>` |
-| `UNCONFIRMED` | No outcome recorded (a sender or relay stopped midway) | Check the target's pane; only if the message is missing, the sender runs `slp redeliver --force <seq>` |
+Set `JEV_API_KEY` or `OPENROUTER_API_KEY` before `slp start`. In shadow mode
+(default) Jev's readings are recorded and appear as unmailed incidents; mark
+them, run `slp calibrate`, and set `"jev": { "mode": "on" }` when the
+thresholds look right. Every decision point has a code fallback, so nothing
+depends on Jev ([jev-decisions.md](jev-decisions.md)).
 
-### 6. Your part while the room runs
+### 9. Stop
 
-- **Approve or refuse commands** in the agents' panes. Agents may run `slp`
-  freely; everything else (tests, git, file edits) asks you.
-- **Answer dialogs** only you should answer (trust, permissions, questions).
-- **Read alerts.** The watcher checks every 10 seconds and sends each alert
-  once to the Supervisor pane and as a Herdr notification (retried up to 5
-  times if both fail):
+`slp stop` closes every seat once no lane is open; `slp stop --force` closes
+them anyway (the lanes stay open in the record, with their branches). slp
+never pushes: push landed work through your usual workflow.
 
-| Alert | After | Usually means | Do |
-| --- | --- | --- | --- |
-| `blocked` | 3 min on a dialog | An agent waits for your approval | Answer it in that pane |
-| `peer-idle-without-handback` | 3 min idle after a brief/reply | The Peer stopped without reporting | Read `slp log <case>`; ask the Lead to follow up |
-| `lead-no-disposition` | 10 min Lead idle after a handback | A handback was not dispositioned | Nudge the Lead |
-| `undelivered` | 3 min | A message did not arrive (or a queued one was not relayed) | See the table in step 5; check that `slp watch` runs |
-| `member-gone` | immediately | An agent exited or another program took its pane | Restart the agent or close the room |
-| `jev-drift` | `--jev alert` only | A model judged the communication off-protocol | Review `slp log <case>`; it is a judgment, not proof |
+## Example (live run, 2026-09-27, lab repository)
 
-Alerts are reminders, not verdicts; no alert does not prove all is well.
-
-- **Do not type into a Peer's pane** or message members through Herdr
-  directly: those messages bypass the log and supervision. Talk to the Lead.
-- **Inspect at any time:** `slp status --room myroom`, `slp log c1 --room myroom`.
-
-### 7. Optional: Jev
-
-`slp watch` runs the deterministic rules only. `--jev shadow` also records a
-Jev assessment of each case state (needs `JEV_API_KEY`; the full case messages
-are sent to TypeSafe); `--jev alert` additionally raises `jev-drift`. Start
-with shadow and compare its judgments with your own before relying on alerts.
-To use it with a `--watch` room, stop that watcher and run
-`slp watch --room myroom --jev shadow` in a terminal that has the key.
-
-### 8. Close the room
-
-From a terminal outside the room: `slp down myroom`. It closes the workspace
-(agents and watcher included) and moves the room data to
-`~/.slp/rooms/.archive/`. If the workspace is already gone,
-`slp down myroom --force` archives the room anyway. Commit the work itself
-through your normal repository workflow; slp does not commit.
-
-## Example: fixing a bug with review
-
-Observed in a live run (2026-09-27, `lab7`):
-
-1. You: "Fix the failing tests in `src/cart.js`; p1 fixes, p2 reviews
-   read-only; verify and close; do not commit."
-2. Lead → p1, brief `c1`: outcome "`npm test` passes", write scope
-   `src/cart.js` only (no test edits, no commit), constraints (minimal
-   change, same exports), required evidence.
-3. p1 (Codex, sandboxed) fixes one line and hands back outcome, changed
-   path, `npm test` result and root cause. Its message is queued and relayed
-   by the watcher in 9 s.
-4. Lead → p2, reply on `c1`: review the change read-only, including edge
-   cases.
-5. p2 hands back "request changes": a missing `quantity` now gives `NaN`;
-   suggests defaulting to 1 and adding tests.
-6. Lead decides and says why: missing quantity is not a documented input and
-   test edits were forbidden, so it accepts the fix as is, flags the edge case
-   to you as an open question, verifies `npm test` and `git diff` itself, and
-   closes with `slp reply c1 p2 "..." --close`.
-7. Total: about two minutes, no alerts, the repository changed by exactly the
-   one-line fix.
-
-In an earlier run, p2 first answered only "approve" with no evidence; the Lead
-replied asking for it before closing. Both runs show the contract at work: a
-review can disagree, and every handback gets an explicit, reasoned
-disposition.
+1. You: "a greet(name) function in src/greet.js ... with tests; decide the
+   rest yourself, then land it."
+2. The Supervisor wrote the concept (adding its own decision: non-strings also
+   throw), opened L1 with four checkable acceptance items and a write set of
+   three files, and a Critic.
+3. The Critic flagged one ambiguity ("only spaces": U+0020 or any
+   whitespace?); the Supervisor kept its reading and told the Lead why.
+4. The Lead briefed a Codex Peer; its sandbox could not reach Herdr, so its
+   hand-back was queued and the watcher relayed it.
+5. The Lead checked the diff and ran the tests, accepted, and reported ready;
+   the gate ran green; the Supervisor landed it. Main gained one commit,
+   `greet(name) in src/greet.js`; the lane's branch and tab were gone.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `NEEDS ATTENTION ... trust` on `slp up` | First run in this folder | Answer the dialog, paste the printed onboarding text |
-| `NEEDS ATTENTION ... agent_pane_busy` | Another program holds the pane | slp retries and moves to a new pane; if it still fails, start the agent in that pane yourself |
-| `slp ... cannot be loaded because running scripts is disabled` | PowerShell blocks npm's `slp.ps1` | Use `slp.cmd` (agents are told this on Windows) |
-| An agent says "not a member of any SLP room" | Its commands run elsewhere (e.g. Codex's shared daemon) | Rooms start Codex with `--no-daemon`; restart the agent that way |
-| A message sits as `[Pasted text ...]` in the Lead's input | The agent ignored Enter | slp presses Enter once more; press it yourself if it remains |
-| `QUEUED` does not clear | No watcher is running | `slp watch --room myroom` in a normal terminal |
-| `Room ... is already watched by pid N` | A watcher already runs | Use that one, or stop it first |
-| `Timed out waiting for room lock` | Another slp process holds the log briefly or hung | Retry; a lock whose owner died is reclaimed automatically |
+| `NEEDS ATTENTION ... startup dialog` | First run of that agent or account in this folder | Answer the dialog; with a watcher running the seat is introduced afterwards, else `slp intro <seat>` |
+| A Codex Peer asks to approve every command, "sandbox setup helper canceled" | Its account's Windows sandbox is not set up | Open that Codex account once and complete the setup |
+| `slp ... cannot be loaded because running scripts is disabled` | PowerShell blocks npm's `slp.ps1` | Use `slp.cmd` (seats are told so on Windows) |
+| "not a seat of any slp team" | The command runs outside the seat's pane (e.g. a shared daemon) | Codex seats start with `--no-daemon`; restart that seat |
+| `queued` letters stay queued | No watcher runs | `slp watch` in a normal terminal |
+| "is the Human's command" | A seat tried `start`, `stop`, `watch`, `intro` or `calibrate` | Nothing; those are yours |
+| "moved while the lane was being landed" | Someone committed to the base during landing | Land again |
+| "has uncommitted work" on drop, or a kept worktree | slp never discards work | Have a Peer commit or discard it, then retry |

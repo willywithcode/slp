@@ -20,6 +20,8 @@ Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
 - [0011](0011-accounts-and-models.md) Accounts and models per seat, managed by the Supervisor
 - [0012](0012-herdr-is-the-backbone.md) Herdr is the backbone: seats open and talk only through Herdr
 - [0013](0013-jev-is-optional.md) slp works fully without Jev
+- [0014](0014-dialogs-and-prompts-are-the-humans.md) Dialogs and prompts are the Human's
+- [0015](0015-landing-holds.md) Landing holds for risk
 
 ## Add A Decision When
 
