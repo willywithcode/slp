@@ -5,6 +5,7 @@ import { GoneError, SlpError } from "./core/errors.js";
 import { append, readLedger, Role } from "./core/ledger.js";
 import { acquireLock, releaseLock } from "./core/lock.js";
 import { configPath } from "./core/paths.js";
+import { dotenvPath, withDotenv } from "./core/dotenv.js";
 import { contextPath, loadProject, rootFor } from "./core/project.js";
 import { guide } from "./guide.js";
 import { Herdr } from "./herdr.js";
@@ -146,6 +147,7 @@ export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
             arity(0);
             await loadConfig(deps.env);
             deps.out(configPath(deps.env));
+            deps.out(`${dotenvPath(deps.env)} (keys such as JEV_API_KEY)`);
             return 0;
         case "calibrate": {
             arity(0);
@@ -427,6 +429,8 @@ export function decodeText(bytes) {
 export async function run(argv, env) {
     const deps = { env, herdr: new Herdr(), out: (line) => console.log(line) };
     try {
+        // slp's own keys (Jev) from ~/.slp/.env, under the environment.
+        deps.env = await withDotenv(env);
         return await main(argv, deps);
     }
     catch (error) {
