@@ -1,0 +1,78 @@
+import type { SlpEvent } from "../core/ledger.js";
+
+// `slp calibrate` (ADR 0009, 0013): for each Jev question, how well its
+// confidence separates readings the seats marked useful from those marked
+// noise, and the lowest threshold that is precise enough and stays within
+// the daily budget. Questions without enough marks get no threshold, and so
+// never act.
+
+export interface Calibration {
+  key: string;
+  useful: number;
+  noise: number;
+  /** Mean confidence of useful minus noise readings. */
+  separation: number | null;
+  threshold: number | null;
+  /** Why no threshold, when there is none. */
+  reason: string | null;
+}
+
+export const calibration = { minMarks: 5, precision: 0.8 };
+
+/** A shadow reading's question and subject, from its incident key `jev:<point>.<question>:<subject>`. */
+function parseKey(key: string): { point: string; question: string; subject: string } | null {
+  const m = /^jev:([a-z_]+)\.([A-Za-z0-9_]+):(.+)$/.exec(key);
+  return m ? { point: m[1]!, question: m[2]!, subject: m[3]! } : null;
+}
+
+export function calibrate(events: readonly SlpEvent[], budgetPerDay: number): Calibration[] {
+  const readings = new Map<string, Record<string, { choice: string; confidence: number }>>();
+  let first = Infinity;
+  let last = 0;
+  for (const e of events) {
+    if (e.kind !== "jev" || !e.answers) continue;
+    readings.set(`${e.point}|${e.subject}`, e.answers);
+    first = Math.min(first, Date.parse(e.ts));
+    last = Math.max(last, Date.parse(e.ts));
+  }
+  const days = Math.max(1, (last - first) / 86_400_000);
+  const verdicts = new Map<string, string>();
+  for (const e of events) if (e.kind === "ack") verdicts.set(e.incident, e.verdict);
+
+  // Per question: every reading that flagged it, with its confidence and mark.
+  const byKey = new Map<string, { confidence: number; verdict: string | undefined }[]>();
+  for (const e of events) {
+    if (e.kind !== "incident") continue;
+    const k = parseKey(e.key);
+    if (!k) continue;
+    const answer = readings.get(`${k.point}|${k.subject}`)?.[k.question];
+    if (!answer) continue;
+    const key = `${k.point}.${k.question}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), { confidence: answer.confidence, verdict: verdicts.get(e.incident) }]);
+  }
+
+  const out: Calibration[] = [];
+  for (const [key, all] of [...byKey].sort(([a], [b]) => a.localeCompare(b))) {
+    const marked = all.filter((r) => r.verdict === "useful" || r.verdict === "noise");
+    const useful = marked.filter((r) => r.verdict === "useful");
+    const noise = marked.filter((r) => r.verdict === "noise");
+    const mean = (xs: typeof marked) => xs.reduce((s, r) => s + r.confidence, 0) / xs.length;
+    const separation = useful.length && noise.length ? mean(useful) - mean(noise) : null;
+    let threshold: number | null = null;
+    let reason: string | null = null;
+    if (marked.length < calibration.minMarks) {
+      reason = `needs ${calibration.minMarks - marked.length} more mark(s)`;
+    } else {
+      const candidates = [...new Set(marked.map((r) => r.confidence))].filter((c) => c >= 0.5).sort((a, b) => a - b);
+      for (const t of candidates) {
+        const above = marked.filter((r) => r.confidence >= t);
+        const precise = above.filter((r) => r.verdict === "useful").length / above.length >= calibration.precision;
+        const perDay = all.filter((r) => r.confidence >= t).length / days;
+        if (precise && perDay <= budgetPerDay) { threshold = t; break; }
+      }
+      if (threshold === null) reason = `no threshold reaches ${Math.round(calibration.precision * 100)}% useful within ${budgetPerDay}/day`;
+    }
+    out.push({ key, useful: useful.length, noise: noise.length, separation, threshold, reason });
+  }
+  return out;
+}

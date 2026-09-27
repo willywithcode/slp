@@ -7,6 +7,7 @@ import { teardownLane } from "./lanes.js";
 import { describe, pump, sendLetter } from "./letters.js";
 import { closeSeat } from "./seats.js";
 import { fold, liveSeats, superiorOf } from "./state.js";
+import { JevDesk } from "./jev/desk.js";
 import { Observer } from "./watch/observer.js";
 // The watcher (ADR 0009): code, not a seat. It relays waiting letters, runs
 // gates and landings, and keeps the team moving with a few plain rules.
@@ -30,10 +31,17 @@ export class Watcher {
     /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
     dialogTold = new Set();
     observer;
+    desk;
+    /** The last ledger event handed to the decision points. */
+    seen = 0;
     constructor(deps, projectId) {
         this.deps = deps;
         this.projectId = projectId;
-        this.observer = new Observer(deps);
+        this.desk = new JevDesk(deps);
+        this.observer = new Observer(deps, {
+            turnEnded: (project, state, config, seat, steps) => this.desk.turnEnded(project, state, config, seat, steps),
+            unknownError: (project, state, config, seat, step) => this.desk.unknownError(project, state, config, seat, step),
+        });
     }
     now() { return this.deps.now?.() ?? Date.now(); }
     /** One pass. Throws GoneError when the project no longer exists. */
@@ -63,8 +71,14 @@ export class Watcher {
                 this.deps.out(`watch: ${describe(error)}`);
                 return null;
             });
-            if (config)
+            if (config) {
                 await this.observer.observe(project, state, config, status);
+                await this.desk.timers(project, state, status);
+                const events = await readLedger(this.deps.env, project.id);
+                const fresh = events.filter((e) => e.seq > this.seen);
+                this.seen = events.at(-1)?.seq ?? this.seen;
+                await this.desk.events(project, state, config, fresh, (seat) => this.observer.steps(seat));
+            }
         }
         await this.remindAsks(project, state);
     }

@@ -131,14 +131,14 @@ export async function closeLane(a, laneId, how) {
         throw new SlpError("Say how: --land, or --drop --reason \"...\"");
     if (how.drop)
         return dropLane(a.deps, a.project, laneId, how.reason);
-    if (how.overGate && !how.reason.trim())
-        throw new SlpError("Landing over a red gate needs --reason \"...\"");
+    if ((how.overGate || how.overRisk) && !how.reason.trim())
+        throw new SlpError("Landing over a red gate or a risk hold needs --reason \"...\" (the Human's words).");
     const events = await readLedger(a.deps.env, a.project.id);
     if (pendingRequests(events).some((r) => r.lane === laneId))
         throw new SlpError(`Lane ${laneId} has a gate or landing in progress.`);
     const req = await append(a.deps.env, a.project.id, (evs) => ({
         kind: "request", request: nextId(evs, "request", "Q"), what: "land", lane: laneId, by: a.seat.name,
-        note: how.reason, overGate: how.overGate,
+        note: how.reason, overGate: how.overGate, ...(how.overRisk ? { overRisk: true } : {}),
     }));
     const watching = await lockHeldByLiveProcess(watchLockPath(a.deps.env, a.project.id));
     a.deps.out(`Landing ${laneId} (${req.request}): the watcher merges ${lane.base} in, runs the gate and lands it; a LANDED or REPORT letter follows.` +

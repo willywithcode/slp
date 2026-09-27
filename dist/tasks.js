@@ -5,11 +5,14 @@ import { projectDir } from "./core/paths.js";
 import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto, removeWorktree } from "./git.js";
 import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
+import { changedLines } from "./risk.js";
 import { intro } from "./guide.js";
 import { describe, sendLetter } from "./letters.js";
 import { closeSeat, openSeat } from "./seats.js";
 import { fold } from "./state.js";
 const ACTIVE = new Set(["running", "handed-back", "rework"]);
+/** A hand-back changing at least this many lines suggests a review. */
+export const REVIEW_LINES = 300;
 function slug(title) {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24).replace(/^-+|-+$/g, "") || "task";
 }
@@ -119,6 +122,7 @@ export async function handBack(a, h) {
     const tip = await head(task.workdir);
     const changed = await changedFiles(task.workdir, task.baseCommit, tip);
     const outside = changed.filter((f) => !matches(task.owned, f));
+    const lines = await changedLines(task.workdir, task.baseCommit, tip);
     const log = (await git(task.workdir, ["log", "--oneline", `${task.baseCommit}..${tip}`])).stdout.trim();
     await append(deps.env, project.id, () => ({
         kind: "task-done", task: task.id, outcome: h.outcome, summary: h.summary, checks: h.checks, leftUndone: h.left, head: tip,
@@ -131,6 +135,8 @@ export async function handBack(a, h) {
         `Changed: ${changed.join(", ") || "(nothing)"}`,
         ...(outside.length ? [`OUTSIDE owned paths (${task.owned.join(", ")}): ${outside.join(", ")}`] : []),
         ...(dirty.length ? [`Uncommitted: ${dirty.join(", ")}`] : []),
+        // Catalogue 12 fallback: a large change suggests a clean-context review.
+        ...(lines >= REVIEW_LINES ? [`Large change (${lines} lines): consider \`slp start-review --task ${task.id}\` before accepting.`] : []),
         "", `See the change: slp diff ${task.id}`,
     ].join("\n");
     await sendLetter(deps, project.id, { letter: "HANDBACK", from: a.seat.name, to: task.lane, lane: task.lane, task: task.id, text });
@@ -261,6 +267,7 @@ export async function startReview(a, config, target, focus) {
         throw error;
     }
 }
+const SEVERITY = { high: 0, medium: 1, low: 2 };
 export function parseFinding(raw) {
     const parts = raw.split("::").map((p) => p.trim());
     const severity = parts[0]?.toLowerCase();
@@ -280,7 +287,7 @@ export async function finishReview(a, summary, findings) {
     const text = [
         summary.trim(), "",
         findings.length ? `Findings (${findings.length}):` : "No findings.",
-        ...findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.where}: ${f.what}\n   evidence: ${f.evidence}`),
+        ...[...findings].sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity]).map((f, i) => `${i + 1}. [${f.severity}] ${f.where}: ${f.what}\n   evidence: ${f.evidence}`),
     ].join("\n");
     await sendLetter(a.deps, a.project.id, { letter: "FINDINGS", from: a.seat.name, to: review.lane, lane: review.lane,
         task: a.seat.task, text });

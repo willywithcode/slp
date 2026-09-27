@@ -4,6 +4,10 @@ import type { Project } from "./core/project.js";
 import { detectGate, runGate, type GateResult } from "./gate.js";
 import { dirtyPaths, git, head, mergeInto, squashCommit, treeOf, worktrees } from "./git.js";
 import { teardownLane } from "./lanes.js";
+import { loadConfig } from "./core/config.js";
+import { consult } from "./jev/points.js";
+import { LANDING } from "./jev/questions.js";
+import { dataLossSigns, laneReviewed, laneRisky } from "./risk.js";
 import { sendLetter } from "./letters.js";
 import { fold, leadOf, type Lane, type State } from "./state.js";
 
@@ -100,6 +104,24 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
   }
   const gate = await gateFor(deps, project, state, lane);
   if (gate && !gate.result.ok && !req.overGate) return fail(`the gate is red.\n\n${gateText(gate)}`, true);
+
+  // Risk holds (catalogue 6, 16): code rules first; Jev may add a hold once calibrated.
+  if (!req.overRisk) {
+    const holds: string[] = [];
+    const risky = laneRisky(lane);
+    if (risky && !laneReviewed(state, lane.id)) holds.push(`it is a high-risk lane (${risky}) and has had no review of the whole lane (its Lead: \`slp start-review --lane\`)`);
+    holds.push(...await dataLossSigns(root, baseHead, lane.branch));
+    const config = await loadConfig(deps.env).catch(() => null);
+    const diff = (await git(root, ["diff", "-U2", `${baseHead}..${lane.branch}`])).stdout;
+    const reading = config ? await consult(deps, project.id, config, "landing", `${lane.id}@${await head(root, lane.branch)}`,
+      { lane: { title: lane.title, outcome: lane.outcome }, diff: diff.length > 20_000 ? `${diff.slice(0, 20_000)}\n…` : diff }, LANDING) : null;
+    if (reading?.trusted("data_loss_risk", "yes")) holds.push(`Jev reads a data-loss risk (${reading.answers.data_loss_risk!.confidence.toFixed(2)})`);
+    if (holds.length) {
+      await deps.herdr.notify(`slp: ${lane.id} held for you`, holds.join("; ")).catch(() => undefined);
+      return fail(`held for the Human: ${holds.join("; ")}. If the Human agrees to land it anyway: ` +
+        `\`slp close-lane ${lane.id} --land --over-risk --reason "the Human agreed: ..."\``, false);
+    }
+  }
 
   let commit = baseHead;
   if ((await treeOf(root, lane.branch)) !== (await treeOf(root, baseHead))) {

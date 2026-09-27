@@ -1,14 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { loadConfig } from "./core/config.js";
+import { loadConfig, saveConfig } from "./core/config.js";
 import type { Deps } from "./core/deps.js";
 import { GoneError, SlpError } from "./core/errors.js";
-import { append, Role } from "./core/ledger.js";
+import { append, readLedger, Role } from "./core/ledger.js";
 import { acquireLock, releaseLock } from "./core/lock.js";
 import { configPath, type Env } from "./core/paths.js";
 import { contextPath, loadProject } from "./core/project.js";
 import { guide } from "./guide.js";
 import { Herdr } from "./herdr.js";
+import { calibrate } from "./jev/calibrate.js";
 import { projectHere, whoAmI } from "./identity.js";
 import { amendLane, openLane } from "./lanes.js";
 import { redeliver, watchLockPath } from "./letters.js";
@@ -29,6 +30,8 @@ The Human (in a Herdr pane, inside the repository):
   slp redeliver <seq> [--force]
   slp watch [--project ID] [--once] [--interval SECONDS]
   slp config                where the accounts and models are configured
+  slp incidents             what the watch found; mark one: slp ack <id> useful|noise|unknown
+  slp calibrate [--dry-run] set Jev's thresholds from those marks
 
 Seats run \`slp guide\` for their own verbs. State lives in ~/.slp (SLP_HOME).`;
 
@@ -36,13 +39,13 @@ const OPTIONS = {
   title: { type: "string" }, outcome: { type: "string" }, accept: { type: "string", multiple: true },
   out: { type: "string", multiple: true }, write: { type: "string", multiple: true }, human: { type: "string" },
   isolate: { type: "boolean" }, why: { type: "string" }, land: { type: "boolean" }, drop: { type: "boolean" },
-  "over-gate": { type: "boolean" }, reason: { type: "string" }, base: { type: "string" }, gate: { type: "string" },
+  "over-gate": { type: "boolean" }, "over-risk": { type: "boolean" }, reason: { type: "string" }, base: { type: "string" }, gate: { type: "string" },
   "no-gate": { type: "boolean" }, "gate-timeout": { type: "string" }, goal: { type: "string" },
   own: { type: "string", multiple: true }, context: { type: "string" }, preset: { type: "string" },
   parallel: { type: "boolean" }, task: { type: "string" }, lane: { type: "boolean" }, focus: { type: "string" },
   check: { type: "string", multiple: true }, left: { type: "string" }, finding: { type: "string", multiple: true },
   default: { type: "string" }, force: { type: "boolean" }, project: { type: "string" }, once: { type: "boolean" },
-  interval: { type: "string" }, file: { type: "string" }, help: { type: "boolean", short: "h" },
+  interval: { type: "string" }, file: { type: "string" }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
 } as const;
 
 export class UsageError extends Error {}
@@ -52,7 +55,9 @@ type TextArg = (arg: string | undefined) => Promise<string>;
 type Arity = (n: number, m?: number) => void;
 
 /** Commands only the Human runs, never a seat. */
-const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch"]);
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate"]);
+/** Seat verbs the Human may run too. */
+const HUMAN_TOO = new Set(["incidents", "ack"]);
 
 /** Verbs only a seat runs; everything else is the Human's. */
 const SEAT_VERBS = new Set([
@@ -83,7 +88,9 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
   };
 
   if (SEAT_VERBS.has(command)) {
-    const me = await whoAmI(deps.env);
+    // The Human may also list and mark incidents, from any terminal.
+    const me = HUMAN_TOO.has(command) ? await whoAmI(deps.env).catch(() => null) : await whoAmI(deps.env);
+    if (!me) return humanIncidents(deps, cwd, command, args, arity);
     if (!mayRun(me.seat.role, command)) throw new SlpError(`The ${me.seat.role} does not run \`slp ${command}\`; see \`slp guide\`.`);
     return seatVerb(command, args, values, { deps, project: me.project, state: me.state, seat: me.seat }, text, arity);
   }
@@ -135,6 +142,28 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
       return 0;
     }
     case "config": arity(0); await loadConfig(deps.env); deps.out(configPath(deps.env)); return 0;
+    case "calibrate": {
+      arity(0);
+      const { project } = await projectHere(deps.env, cwd);
+      const config = await loadConfig(deps.env);
+      const results = calibrate(await readLedger(deps.env, project.id), config.watch.budgetPerDay);
+      if (!results.length) {
+        deps.out("No Jev readings have been marked yet. Mark incidents with `slp ack <id> useful|noise`, then calibrate again.");
+        return 0;
+      }
+      const thresholds = { ...config.jev.thresholds };
+      for (const r of results) {
+        deps.out(`${r.key.padEnd(36)} useful ${String(r.useful).padStart(3)} noise ${String(r.noise).padStart(3)} ` +
+          `separation ${r.separation === null ? "  -  " : r.separation.toFixed(2)}  ${r.threshold !== null ? `threshold ${r.threshold.toFixed(2)}` : r.reason}`);
+        if (r.threshold !== null) thresholds[r.key] = r.threshold;
+        else delete thresholds[r.key];
+      }
+      if (values["dry-run"]) return 0;
+      await saveConfig(deps.env, { ...config, jev: { ...config.jev, thresholds } });
+      deps.out(`thresholds saved to ${configPath(deps.env)}` +
+        (config.jev.mode === "on" ? "" : `; Jev is in ${config.jev.mode} mode, so they act only once "jev.mode" is "on"`));
+      return 0;
+    }
     case "watch": {
       arity(0);
       const id = values.project ?? deps.env.SLP_PROJECT ?? (await projectHere(deps.env, cwd)).project.id;
@@ -192,7 +221,7 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
       return 0;
     case "close-lane":
       arity(1);
-      await closeLane(a, args[0]!, { land: v.land === true, drop: v.drop === true, overGate: v["over-gate"] === true, reason: v.reason ?? "" });
+      await closeLane(a, args[0]!, { land: v.land === true, drop: v.drop === true, overGate: v["over-gate"] === true, overRisk: v["over-risk"] === true, reason: v.reason ?? "" });
       return 0;
     case "set-project":
       arity(0);
@@ -256,6 +285,24 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
     default:
       throw new UsageError(`Unknown command "${command}"`);
   }
+}
+
+/** The Human's view of incidents, and marks (`by: human`). */
+async function humanIncidents(deps: Deps, cwd: string, command: string, args: string[], arity: Arity): Promise<number> {
+  const { project, state } = await projectHere(deps.env, cwd);
+  const acked = new Set(state.acks.map((k) => k.incident));
+  if (command === "incidents") {
+    arity(0);
+    const open = state.incidents.filter((i) => !acked.has(i.incident));
+    deps.out(open.length ? open.map((i) => `${i.incident} [${i.level}] ${i.seat} → ${i.to ?? "you"}: ${i.text}`).join("\n") : "No unmarked incidents.");
+    return 0;
+  }
+  arity(2, 3);
+  const verdict = args[1];
+  if (verdict !== "useful" && verdict !== "noise" && verdict !== "unknown") throw new UsageError("Verdict is useful, noise or unknown");
+  if (!state.incidents.some((i) => i.incident === args[0])) throw new SlpError(`No incident ${args[0]}`);
+  await append(deps.env, project.id, () => ({ kind: "ack" as const, incident: args[0]!, by: "human", verdict, note: args[2] ?? "" }));
+  return 0;
 }
 
 async function watch(deps: Deps, id: string, interval: number, once: boolean): Promise<number> {

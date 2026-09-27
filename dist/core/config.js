@@ -37,6 +37,13 @@ const ConfigSchema = z.object({
     // turns mail on; at most budgetPerDay per recipient.
     watch: z.object({ mail: z.boolean().default(false), budgetPerDay: z.number().int().positive().default(20) })
         .default({ mail: false, budgetPerDay: 20 }),
+    // Jev (ADR 0013): off, shadow (record only) or on (act where calibrated).
+    // Thresholds are set by `slp calibrate`, keyed "<point>.<question>".
+    jev: z.object({
+        mode: z.enum(["off", "shadow", "on"]).default("shadow"),
+        dailyCalls: z.number().int().nonnegative().default(300),
+        thresholds: z.record(z.string(), z.number().min(0.5).max(1)).default({}),
+    }).default({ mode: "shadow", dailyCalls: 300, thresholds: {} }),
 }).superRefine((c, ctx) => {
     for (const [role, rc] of Object.entries(c.roles)) {
         for (const name of [...rc.use, ...Object.values(rc.presets).flatMap((p) => (p.launcher ? [p.launcher] : []))]) {
@@ -82,6 +89,7 @@ export function defaultConfig(platform = process.platform) {
         return {
             version: 1,
             watch: { mail: false, budgetPerDay: 20 },
+            jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
             launchers: {
                 claude: { agent: "claude", env: {}, prep: {} },
                 "claude-acc1": claudeToken("acc1"),
@@ -103,6 +111,7 @@ export function defaultConfig(platform = process.platform) {
     return {
         version: 1,
         watch: { mail: false, budgetPerDay: 20 },
+        jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
         launchers: {
             claude: { agent: "claude", env: {}, prep: {} },
             codex: { agent: "codex", env: {}, prep: {} },
@@ -169,4 +178,9 @@ export function chooseSeat(config, role, opened, presetName) {
 }
 export function expandHome(value) {
     return value.replace(/\{home\}/g, homedir());
+}
+export async function saveConfig(env, config) {
+    const path = configPath(env);
+    await mkdir(dirname(path), { recursive: true });
+    await writeAtomic(path, `${JSON.stringify(parseConfig(config), null, 2)}\n`);
 }

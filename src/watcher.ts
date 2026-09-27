@@ -8,6 +8,7 @@ import { teardownLane } from "./lanes.js";
 import { describe, pump, sendLetter } from "./letters.js";
 import { closeSeat } from "./seats.js";
 import { fold, liveSeats, superiorOf, type Seat, type State } from "./state.js";
+import { JevDesk } from "./jev/desk.js";
 import { Observer } from "./watch/observer.js";
 
 // The watcher (ADR 0009): code, not a seat. It relays waiting letters, runs
@@ -32,9 +33,16 @@ export class Watcher {
   /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
   private readonly dialogTold = new Set<string>();
   private readonly observer: Observer;
+  private readonly desk: JevDesk;
+  /** The last ledger event handed to the decision points. */
+  private seen = 0;
 
   constructor(private readonly deps: Deps, private readonly projectId: string) {
-    this.observer = new Observer(deps);
+    this.desk = new JevDesk(deps);
+    this.observer = new Observer(deps, {
+      turnEnded: (project, state, config, seat, steps) => this.desk.turnEnded(project, state, config, seat, steps),
+      unknownError: (project, state, config, seat, step) => this.desk.unknownError(project, state, config, seat, step),
+    });
   }
 
   private now(): number { return this.deps.now?.() ?? Date.now(); }
@@ -62,7 +70,14 @@ export class Watcher {
         this.deps.out(`watch: ${describe(error)}`);
         return null;
       });
-      if (config) await this.observer.observe(project, state, config, status);
+      if (config) {
+        await this.observer.observe(project, state, config, status);
+        await this.desk.timers(project, state, status);
+        const events = await readLedger(this.deps.env, project.id);
+        const fresh = events.filter((e) => e.seq > this.seen);
+        this.seen = events.at(-1)?.seq ?? this.seen;
+        await this.desk.events(project, state, config, fresh, (seat) => this.observer.steps(seat));
+      }
     }
     await this.remindAsks(project, state);
   }

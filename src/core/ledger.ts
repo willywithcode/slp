@@ -97,6 +97,8 @@ export const EventSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("request"), ...base, request: z.string(), what: z.enum(["ready", "land"]), lane: z.string(),
     by: z.string(), note: text, overGate: z.boolean(),
+    // Land although slp holds it for risk (the Human agreed; the reason says so).
+    overRisk: z.boolean().optional(),
   }),
   z.object({ kind: z.literal("request-done"), ...base, request: z.string(), ok: z.boolean(), detail: text }),
   z.object({

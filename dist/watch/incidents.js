@@ -6,6 +6,8 @@ import { leadOf } from "../state.js";
 // (shadow) until the owner turns it on; pages always reach the Human, and
 // account problems always reach the Supervisor, who may move the seat
 // (ADR 0011).
+class Duplicate extends Error {
+}
 /** Facts about the seat's account rather than its work. */
 const ACCOUNT_FACTS = new Set(["usage_limit", "auth_failed"]);
 export function routeFor(state, seat, fact) {
@@ -25,18 +27,26 @@ function mailedToday(state, to, now) {
 export function alternatives(config, seat) {
     return Object.entries(config.launchers).filter(([name, l]) => l.agent === seat.agent && name !== seat.launcher).map(([name]) => name);
 }
-/** Record a fact about a seat as an incident (once per key) and route it. Returns the incident id, or null if already known. */
-export async function raise(deps, project, state, config, seat, fact) {
+/**
+ * Record a fact about a seat as an incident (once per key) and route it.
+ * `quiet` incidents are never mailed (Jev readings in shadow, kept for
+ * calibration). Returns the incident id, or null if already known.
+ */
+export async function raise(deps, project, state, config, seat, fact, opts = {}) {
     if (state.incidents.some((i) => i.key === fact.key && i.seat === seat.name))
         return null;
     const to = routeFor(state, seat, fact);
-    let duplicate = false;
     const event = await append(deps.env, project, (events) => {
-        duplicate = events.some((e) => e.kind === "incident" && e.key === fact.key && e.seat === seat.name);
+        if (events.some((e) => e.kind === "incident" && e.key === fact.key && e.seat === seat.name))
+            throw new Duplicate();
         return { kind: "incident", incident: nextId(events, "incident", "I"), key: fact.key, seat: seat.name,
             fact: fact.fact, level: fact.level, text: fact.text, to };
+    }).catch((error) => {
+        if (error instanceof Duplicate)
+            return null;
+        throw error;
     });
-    if (duplicate)
+    if (!event)
         return null;
     const id = event.incident;
     const now = deps.now?.() ?? Date.now();
@@ -57,7 +67,7 @@ export async function raise(deps, project, state, config, seat, fact) {
     if (fact.level === "page") {
         await deps.herdr.notify(`slp: ${seat.name} needs a look`, fact.text).catch(() => undefined);
     }
-    if (!config.watch.mail || !to)
+    if (!config.watch.mail || !to || opts.quiet)
         return id;
     if (mailedToday(state, to, now) >= config.watch.budgetPerDay) {
         deps.out(`${id} recorded; ${to} already had ${config.watch.budgetPerDay} incidents today`);

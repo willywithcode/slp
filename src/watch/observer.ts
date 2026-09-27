@@ -35,12 +35,23 @@ interface Watched {
 
 const ACCOUNT = new Set(["usage_limit", "auth_failed"]);
 
+/** Where the watch hands moments to Jev's decision points (they run their own fallbacks). */
+export interface ObserverHooks {
+  turnEnded?(project: Project, state: State, config: Config, seat: Seat, steps: readonly Step[]): Promise<void>;
+  unknownError?(project: Project, state: State, config: Config, seat: Seat, step: Step): Promise<void>;
+}
+
 export class Observer {
   private readonly seats = new Map<string, Watched>();
   /** task-done events already checked for unverified claims. */
   private readonly checkedDone = new Set<string>();
 
-  constructor(private readonly deps: Deps) {}
+  constructor(private readonly deps: Deps, private readonly hooks: ObserverHooks = {}) {}
+
+  /** The steps seen so far for a seat (for Jev's state). */
+  steps(seat: string): readonly Step[] {
+    return this.seats.get(seat)?.steps ?? [];
+  }
 
   private now(): number { return this.deps.now?.() ?? Date.now(); }
 
@@ -55,6 +66,11 @@ export class Observer {
       const worker = ROLE_SPECS[seat.role].watched;
       const found = stepFacts(fresh, this.context(state, seat));
       facts.push(...found.filter((f) => worker || ACCOUNT.has(f.fact)).map((f) => (seat.role === "lead" ? leadWrote(f) : f)));
+      for (const step of fresh) {
+        if (step.kind === "error" && !found.some((f) => ACCOUNT.has(f.fact) && f.key.endsWith(step.at))) {
+          await this.hooks.unknownError?.(project, state, config, seat, step);
+        }
+      }
       if (worker) {
         const stuck = stuckFact(w.steps);
         if (stuck) facts.push(stuck);
@@ -67,6 +83,7 @@ export class Observer {
             text: `has been working on one turn for ${Math.round((this.now() - w.workingSince) / 60_000)} min` });
         }
       } else {
+        if (w.workingSince !== null && worker) await this.hooks.turnEnded?.(project, state, config, seat, w.steps);
         w.workingSince = null;
         if ((s === "idle" || s === "done") && this.now() - w.screenAt >= observeTiming.screenMs) {
           w.screenAt = this.now();

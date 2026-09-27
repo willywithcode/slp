@@ -163,6 +163,10 @@ export class FakeHerdrCli {
 /** One test world: a repository, SLP_HOME, a fake Herdr, and the Human's pane w1:p0. */
 export class World {
   out: string[] = [];
+  /** Extra environment for every call (e.g. a Jev key). */
+  env: Record<string, string> = {};
+  /** Stands in for the network (Jev). */
+  fetch: typeof fetch | undefined;
   constructor(readonly home: string, readonly repo: string, readonly cli: FakeHerdrCli) {}
 
   static async create(): Promise<World> {
@@ -180,8 +184,9 @@ export class World {
       env: {
         SLP_HOME: this.home, HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t1", ...(pane ? { HERDR_PANE_ID: pane } : {}),
         // Transcripts are looked for here, never in the real homes.
-        CLAUDE_CONFIG_DIR: join(this.home, "claude"), CODEX_HOME: join(this.home, "codex"),
+        CLAUDE_CONFIG_DIR: join(this.home, "claude"), CODEX_HOME: join(this.home, "codex"), ...this.env,
       },
+      ...(this.fetch ? { fetch: this.fetch } : {}),
       herdr: new Herdr(this.cli.exec, "herdr"),
       out: (line) => { this.out.push(line); },
       ...(now ? { now } : {}),

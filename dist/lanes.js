@@ -2,12 +2,16 @@ import { join } from "node:path";
 import { SlpError } from "./core/errors.js";
 import { append, nextId, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
+import { contextPath } from "./core/project.js";
+import { readFile } from "node:fs/promises";
+import { criticPrefilter } from "./jev/desk.js";
 import { addWorktree, currentBranch, dirtyPaths, git, gitOk, head, removeWorktree } from "./git.js";
 import { isCatchAll, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
 import { describe, sendLetter } from "./letters.js";
 import { closeSeat, openSeat } from "./seats.js";
 import { humanWordsSince } from "./watch/transcripts.js";
+import { laneRisky } from "./risk.js";
 import { fold, liveSeats } from "./state.js";
 function slug(title) {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32).replace(/^-+|-+$/g, "") || "lane";
@@ -28,7 +32,7 @@ export function checkWriteSet(state, writeSet, except) {
     }
 }
 function directive(lane) {
-    return [
+    const lines = [
         `Lane ${lane.id}: ${lane.title}`,
         "",
         `Outcome: ${lane.outcome}`,
@@ -41,7 +45,11 @@ function directive(lane) {
         `Branch: ${lane.branch}   Working copy: ${lane.workdir}   Base: ${lane.base} @ ${lane.baseCommit.slice(0, 10)}`,
         "The Human's concept (read-only for you): `slp context`",
         ...(lane.humanWords ? ["", "The Human asked:", lane.humanWords] : []),
-    ].join("\n");
+    ];
+    const risky = laneRisky(lane);
+    if (risky)
+        lines.push("", `High-risk lane (${risky}): get a review of the whole lane (\`slp start-review --lane\`) before reporting ready; slp holds the landing until then.`);
+    return lines.join("\n");
 }
 export async function openLane(deps, project, config, input) {
     if (!input.title.trim() || !input.outcome.trim())
@@ -106,6 +114,9 @@ export async function openLane(deps, project, config, input) {
 async function openCritic(deps, project, config, lane, beside) {
     const name = `${lane.id}-critic`;
     try {
+        // Catalogue 19: an optional machine first pass, context for the Critic only.
+        const concept = await readFile(contextPath(deps.env, project.id), "utf8").catch(() => "");
+        const first = await criticPrefilter(deps, project.id, config, lane, concept).catch(() => null);
         const critic = await openSeat(deps, project, config, {
             name, role: "critic", lane: lane.id, task: null, cwd: lane.workdir,
             place: { kind: "split", from: beside, direction: "down" },
@@ -115,6 +126,7 @@ async function openCritic(deps, project, config, lane, beside) {
                 text: [
                     "Read this lane against the Human's own words and the concept (`slp context`), then report with `slp findings`.",
                     "", "The Human's words:", lane.humanWords, "", "The lane:", directive(lane),
+                    ...(first ? ["", first] : []),
                 ].join("\n"),
             },
         });

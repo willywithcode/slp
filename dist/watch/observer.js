@@ -22,11 +22,17 @@ export const observeTiming = {
 const ACCOUNT = new Set(["usage_limit", "auth_failed"]);
 export class Observer {
     deps;
+    hooks;
     seats = new Map();
     /** task-done events already checked for unverified claims. */
     checkedDone = new Set();
-    constructor(deps) {
+    constructor(deps, hooks = {}) {
         this.deps = deps;
+        this.hooks = hooks;
+    }
+    /** The steps seen so far for a seat (for Jev's state). */
+    steps(seat) {
+        return this.seats.get(seat)?.steps ?? [];
     }
     now() { return this.deps.now?.() ?? Date.now(); }
     async observe(project, state, config, status) {
@@ -43,6 +49,11 @@ export class Observer {
             const worker = ROLE_SPECS[seat.role].watched;
             const found = stepFacts(fresh, this.context(state, seat));
             facts.push(...found.filter((f) => worker || ACCOUNT.has(f.fact)).map((f) => (seat.role === "lead" ? leadWrote(f) : f)));
+            for (const step of fresh) {
+                if (step.kind === "error" && !found.some((f) => ACCOUNT.has(f.fact) && f.key.endsWith(step.at))) {
+                    await this.hooks.unknownError?.(project, state, config, seat, step);
+                }
+            }
             if (worker) {
                 const stuck = stuckFact(w.steps);
                 if (stuck)
@@ -57,6 +68,8 @@ export class Observer {
                 }
             }
             else {
+                if (w.workingSince !== null && worker)
+                    await this.hooks.turnEnded?.(project, state, config, seat, w.steps);
                 w.workingSince = null;
                 if ((s === "idle" || s === "done") && this.now() - w.screenAt >= observeTiming.screenMs) {
                     w.screenAt = this.now();
