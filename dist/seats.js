@@ -181,3 +181,51 @@ export async function closeSeat(deps, project, seat, reason) {
     await deps.herdr.paneClose(seat.paneId).catch(() => undefined);
     await append(deps.env, project, () => ({ kind: "seat-stop", name: seat.name, reason }));
 }
+/**
+ * Move a seat to another account (ADR 0011): a new pane beside it prepared
+ * for the other launcher, the old pane closed, and the same session resumed
+ * there. Only when the Supervisor (for the Human) asks; slp never switches
+ * accounts on its own.
+ */
+export async function moveSeat(deps, project, config, seat, move) {
+    const launcher = config.launchers[move.launcher];
+    if (!launcher)
+        throw new SlpError(`No launcher "${move.launcher}" (known: ${Object.keys(config.launchers).join(", ")})`);
+    if (launcher.agent !== seat.agent)
+        throw new SlpError(`${seat.name} runs ${seat.agent}; ${move.launcher} runs ${launcher.agent}. A session can only move within one agent.`);
+    if (move.launcher === seat.launcher)
+        throw new SlpError(`${seat.name} already runs on ${move.launcher}.`);
+    const paneEnv = { SLP_PROJECT: project.id };
+    const paneId = await deps.herdr.paneSplit(seat.paneId, { direction: "down", cwd: move.cwd, env: paneEnv });
+    const ready = (pane) => prepare(deps, pane, launcher.env, launcher.prep);
+    await ready(paneId);
+    const args = agentArgs(launcher.agent, {
+        role: seat.role, model: seat.model, effort: seat.effort, sessionId: null, resume: move.resume, markerDir: seat.marker,
+        slpHome: slpHome(deps.env), projectDir: projectDir(deps.env, project.id), writableDirs: move.writableDirs,
+    });
+    // The old agent goes first: one agent per session, and Herdr names are unique.
+    await deps.herdr.paneClose(seat.paneId).catch(() => undefined);
+    let started;
+    try {
+        started = await startAgent(deps, herdrName(project.id, seat.name), launcher.agent, paneId, args, { cwd: move.cwd, env: paneEnv, ready });
+    }
+    catch (error) {
+        await append(deps.env, project.id, () => ({ kind: "seat-stop", name: seat.name, reason: `move to ${move.launcher} failed: ${describe(error)}` }));
+        throw error;
+    }
+    await append(deps.env, project.id, () => ({
+        kind: "seat", name: seat.name, role: seat.role, lane: seat.lane, task: seat.task, launcher: move.launcher,
+        agent: seat.agent, model: seat.model, effort: seat.effort, paneId: started.paneId, tabId: seat.tabId,
+        sessionId: seat.sessionId, marker: seat.marker,
+    }));
+    const moved = fold(await readLedger(deps.env, project.id)).seats.get(seat.name);
+    const notice = { letter: "NOTICE", from: "slp", to: seat.name, lane: seat.lane, task: seat.task,
+        text: `This session was moved to another account (${move.launcher}). Carry on where you left off.` };
+    if (started.blocked || await atStartupDialog(deps, started.paneId)) {
+        await queueLetter(deps, project.id, notice);
+        return { seat: moved, attention: `${seat.name} waits on a startup dialog in pane ${started.paneId}; answer it yourself.` };
+    }
+    await sendLetter(deps, project.id, notice).catch(() => undefined);
+    deps.out(`${seat.name} moved to ${move.launcher} in ${started.paneId}`);
+    return { seat: moved, attention: null };
+}

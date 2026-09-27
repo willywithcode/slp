@@ -128,6 +128,12 @@ async function deliver(deps: Deps, project: string, letter: EventOf<"letter">): 
     deps.out(`${letter.letter} #${letter.seq} recorded; ${letter.to} is busy, the watcher delivers it when it is free.`);
     return { seq: letter.seq, status: "queued" };
   }
+  if (status === "blocked") {
+    // A prompt waits in its pane; typing now would answer it. Never.
+    await record(deps, project, letter.seq, false, "a prompt waits in its pane");
+    throw new SlpError(`${letter.letter} #${letter.seq} was recorded but NOT delivered: ${letter.to} (pane ${target.paneId}) waits on a ` +
+      `prompt only the Human answers, and no watcher runs to deliver it afterwards. Then: \`slp redeliver ${letter.seq}\`.`);
+  }
   if (await atStartupDialog(deps, target.paneId)) {
     if (watching) {
       await record(deps, project, letter.seq, false, null, "queued", "busy");
@@ -142,6 +148,11 @@ async function deliver(deps: Deps, project: string, letter: EventOf<"letter">): 
     await handToAgent(deps, target.paneId, await render(deps, project, letter));
   } catch (error) {
     const reason = describe(error);
+    if (error instanceof UnsentError) {
+      await record(deps, project, letter.seq, false, reason);
+      throw new SlpError(`${letter.letter} #${letter.seq} is in ${letter.to}'s input box but was not submitted (pane ${target.paneId}). ` +
+        "The Human can submit it there; redelivering would paste it twice.");
+    }
     if (unreachable(error) && watching) {
       await record(deps, project, letter.seq, false, reason, "queued", "unreachable");
       deps.out(`${letter.letter} #${letter.seq} recorded; the watcher will deliver it within seconds. Nothing else to do.`);
@@ -208,17 +219,29 @@ export async function pump(deps: Deps, project: string): Promise<{ delivered: nu
     if (!claimed.length) continue;
     const parts = await Promise.all(claimed.map((l) => render(deps, project, l)));
     let error: string | null = null;
+    let retry = false;
     try {
       await handToAgent(deps, target.paneId, parts.join("\n\n---\n\n"));
     } catch (e) {
       error = describe(e);
+      // Try again later, unless the text reached the pane or the seat is gone.
+      retry = !(e instanceof UnsentError) && !(e instanceof HerdrError && e.code === "agent_not_found");
+      if (e instanceof UnsentError) {
+        await deps.herdr.notify(`slp: letters to ${to} not submitted`, `They sit in the input box of pane ${target.paneId}.`).catch(() => undefined);
+      }
     }
-    for (const l of claimed) await record(deps, project, l.seq, error === null, error);
+    for (const l of claimed) {
+      if (error !== null && retry && l.attempts + 1 < MAX_RELAYS) await record(deps, project, l.seq, false, error, "queued", "busy");
+      else await record(deps, project, l.seq, error === null, error);
+    }
     if (error === null) delivered += claimed.length;
-    deps.out(error === null ? `delivered ${claimed.length} waiting letter(s) to ${to}` : `could not deliver waiting letters to ${to}: ${error}`);
+    deps.out(error === null ? `delivered ${claimed.length} waiting letter(s) to ${to}` : `could not deliver waiting letters to ${to}: ${error}${retry ? " (will retry)" : ""}`);
   }
   return { delivered, atDialog };
 }
+
+/** How many times the watcher tries one letter before it counts as failed. */
+const MAX_RELAYS = 5;
 
 /** A relay claim younger than this is in flight; an older one was interrupted. */
 const RELAY_GRACE_MS = 60_000;
@@ -258,10 +281,14 @@ export async function handToAgent(deps: Deps, paneId: string, text: string): Pro
   if (await startsWorking(deps, paneId)) return;
   if (!(await holdsUnsentPaste(deps, paneId))) return;
   const status = await deps.herdr.agentStatus(paneId).catch(() => null);
-  if (status !== "idle" && status !== "done") return; // never press Enter into a dialog
+  // Never press Enter into a dialog (Herdr may call a trust screen idle).
+  if ((status !== "idle" && status !== "done") || await atStartupDialog(deps, paneId)) throw new UnsentError("pasted but not submitted");
   await deps.herdr.sendKeys(paneId, ["enter"]);
-  if (!(await startsWorking(deps, paneId))) deps.out(`  warning: ${paneId} may still hold the message unsent in its input box`);
+  if (!(await startsWorking(deps, paneId)) && await holdsUnsentPaste(deps, paneId)) throw new UnsentError("pasted but not submitted");
 }
+
+/** The text reached the agent's input box but was not submitted. */
+export class UnsentError extends SlpError {}
 
 async function holdsUnsentPaste(deps: Deps, paneId: string): Promise<boolean> {
   const screen = await deps.herdr.agentRead(paneId).catch(() => "");

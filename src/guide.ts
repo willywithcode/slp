@@ -54,9 +54,11 @@ only what it does not already answer, with your recommendation.
    session is enough.
 2. One outcome, one lane:
    \`slp open-lane --title "..." --outcome "..." --accept "..." [--accept ...]
-    [--out "..."] --write "src/area/**" [--human "the Human's own words"]\`
+    [--out "..."] --write "src/area/**"\`
    Acceptance must be checkable; the write set names what the lane may
-   change and nothing wider. Quote the Human's request in --human.
+   change and nothing wider. slp gives the lane the Human's own words from
+   this conversation, and a Critic checks the lane against them once. (Words
+   the Human sent another way: \`--human "..."\`.)
 3. New work while lanes are open: add it to a lane (\`slp amend-lane\`), queue
    it after one, or open its own lane. Ask the Human when it matters to them.
 

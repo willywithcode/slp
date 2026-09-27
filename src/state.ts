@@ -35,6 +35,8 @@ export interface Letter {
   error: string | null;
   /** When the latest delivery event was recorded (a relay claim's age). */
   lastAttemptAt: string | null;
+  /** How many times the watcher has claimed it for delivery. */
+  attempts: number;
 }
 
 export interface Lane {
@@ -139,7 +141,7 @@ export function fold(events: readonly SlpEvent[]): State {
       case "letter":
         letters.set(e.seq, {
           seq: e.seq, ts: e.ts, letter: e.letter, from: e.from, to: e.to, text: e.text, lane: e.lane, task: e.task,
-          status: "unconfirmed", queueReason: null, error: null, lastAttemptAt: null,
+          status: "unconfirmed", queueReason: null, error: null, lastAttemptAt: null, attempts: 0,
         });
         break;
       case "delivery": {
@@ -149,7 +151,7 @@ export function fold(events: readonly SlpEvent[]): State {
         if (l.status === "delivered") break; // a later attempt never undoes a delivery
         if (e.ok) { l.status = "delivered"; l.queueReason = null; l.error = null; }
         else if (e.stage === "queued") { l.status = "queued"; l.queueReason = e.reason ?? null; l.error = e.error; }
-        else if (e.stage === "relaying") { l.status = "relaying"; }
+        else if (e.stage === "relaying") { l.status = "relaying"; l.attempts += 1; }
         else { l.status = "failed"; l.error = e.error; }
         break;
       }

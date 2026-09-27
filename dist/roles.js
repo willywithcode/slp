@@ -22,7 +22,7 @@ export function agentArgs(agent, c) {
         const args = [
             ...(c.model ? ["--model", c.model] : []),
             ...(c.effort ? ["--effort", c.effort] : []),
-            ...(c.sessionId ? ["--session-id", c.sessionId] : []),
+            ...(c.resume ? ["--resume", c.resume] : c.sessionId ? ["--session-id", c.sessionId] : []),
             // ADR 0004: only slp runs without a prompt; everything else still asks.
             "--allowedTools", "Bash(slp *)", "Bash(slp.cmd *)",
         ];
@@ -33,6 +33,7 @@ export function agentArgs(agent, c) {
     }
     if (agent === "codex") {
         return [
+            ...(c.resume ? ["resume", c.resume] : []),
             // ADR 0004: own process (sees its pane's HERDR_PANE_ID); workspace-write
             // so --add-dir is honoured and a Peer can edit code.
             "--no-daemon", "--sandbox", "workspace-write",

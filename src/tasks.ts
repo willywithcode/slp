@@ -72,33 +72,35 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
     throw new SlpError(`Owned paths outside lane ${lane.id}'s write set (${lane.writeSet.join(", ")}): ${outside.join(", ")}. ` +
       "Ask the Supervisor to amend the lane if the task really needs them.");
   }
-  const active = [...a.state.tasks.values()].filter((t) => t.lane === lane.id && ACTIVE.has(t.state));
-  const clash = active.find((t) => overlaps(input.owned, t.owned));
-  if (clash) throw new SlpError(`Owned paths overlap ${clash.id} (${clash.owned.join(", ")}), still ${clash.state}.`);
-  const holder = active.find((t) => t.mode === "lane");
-  if (!input.parallel && holder) {
-    throw new SlpError(`${holder.id} holds the lane's working copy until it is accepted or cut. ` +
-      "Wait, or start this task with --parallel (its own copy).");
-  }
-
-  const number = [...a.state.tasks.values()].filter((t) => t.lane === lane.id).length + 1;
-  const id = `${lane.id}-T${number}`;
-  let branch = lane.branch;
-  let workdir = lane.workdir;
   const laneHead = await head(lane.workdir);
-  if (input.parallel) {
-    branch = `task/${id}-${slug(input.title)}`;
-    workdir = join(projectDir(deps.env, project.id), "slots", id);
-    await addWorktree(project.root, workdir, branch, laneHead);
-  }
+  const slots = join(projectDir(deps.env, project.id), "slots");
+
+  // Reserved under the ledger lock: id, overlap and the one-writer rule are
+  // checked against the record as it is now (a Lead may run commands in
+  // parallel), then the task's copy is made.
+  const started = await append(deps.env, project.id, (events) => {
+    const tasks = [...fold(events).tasks.values()].filter((t) => t.lane === lane.id);
+    const active = tasks.filter((t) => ACTIVE.has(t.state));
+    const clash = active.find((t) => overlaps(input.owned, t.owned));
+    if (clash) throw new SlpError(`Owned paths overlap ${clash.id} (${clash.owned.join(", ")}), still ${clash.state}.`);
+    const holder = active.find((t) => t.mode === "lane");
+    if (!input.parallel && holder) {
+      throw new SlpError(`${holder.id} holds the lane's working copy until it is accepted or cut. ` +
+        "Wait, or start this task with --parallel (its own copy).");
+    }
+    const id = `${lane.id}-T${tasks.length + 1}`;
+    return {
+      kind: "task-start" as const, lane: lane.id, task: id, title: input.title, goal: input.goal, acceptance: input.acceptance,
+      owned: input.owned, outOfScope: input.outOfScope, context: input.context, mode: input.parallel ? "parallel" as const : "lane" as const,
+      branch: input.parallel ? `task/${id}-${slug(input.title)}` : lane.branch,
+      workdir: input.parallel ? join(slots, id) : lane.workdir, baseCommit: laneHead, seat: id,
+    };
+  });
+  const { task: id, branch, workdir } = started;
   const draft = { id, title: input.title, goal: input.goal, acceptance: input.acceptance, owned: input.owned,
     outOfScope: input.outOfScope, context: input.context, branch, workdir };
-  await append(deps.env, project.id, () => ({
-    kind: "task-start" as const, lane: lane.id, task: id, title: input.title, goal: input.goal, acceptance: input.acceptance,
-    owned: input.owned, outOfScope: input.outOfScope, context: input.context, mode: input.parallel ? "parallel" as const : "lane" as const,
-    branch, workdir, baseCommit: laneHead, seat: id,
-  }));
   try {
+    if (input.parallel) await addWorktree(project.root, workdir, branch, laneHead);
     const opened = await openSeat(deps, project, config, {
       name: id, role: "peer", lane: lane.id, task: id, cwd: workdir, preset: input.preset,
       place: { kind: "split", from: a.seat.paneId, direction: "right" },
@@ -108,11 +110,8 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
     });
     if (opened.attention) deps.out(`NEEDS ATTENTION: ${opened.attention}`);
   } catch (error) {
-    await append(deps.env, project.id, () => ({ kind: "task-cut" as const, task: id, reason: `its seat could not open: ${describe(error)}` }));
-    if (input.parallel) {
-      await removeWorktree(project.root, workdir);
-      await git(project.root, ["branch", "-D", branch]);
-    }
+    await append(deps.env, project.id, () => ({ kind: "task-cut" as const, task: id, reason: `it could not start: ${describe(error)}` }));
+    if (input.parallel && await removeWorktree(project.root, workdir)) await git(project.root, ["branch", "-D", branch]);
     throw error;
   }
   return fold(await readLedger(deps.env, project.id)).tasks.get(id)!;
@@ -188,11 +187,12 @@ export async function acceptTask(a: Actor, id: string, note: string): Promise<vo
   }
   await append(deps.env, project.id, () => ({ kind: "task-accept" as const, task: id, note, merged }));
   await finishSeat(a, task, `task ${id} accepted`);
+  let kept = "";
   if (task.mode === "parallel") {
-    await removeWorktree(project.root, task.workdir);
-    await git(project.root, ["branch", "-D", task.branch]);
+    if (await removeWorktree(project.root, task.workdir)) await git(project.root, ["branch", "-D", task.branch]);
+    else kept = `; its worktree changed since and was kept: ${task.workdir}`;
   }
-  deps.out(`${id} accepted${merged ? ` and merged into ${lane.branch}` : ""}`);
+  deps.out(`${id} accepted${merged ? ` and merged into ${lane.branch}` : ""}${kept}`);
 }
 
 export async function reworkTask(a: Actor, id: string, text: string): Promise<void> {
@@ -211,8 +211,9 @@ export async function cutTask(a: Actor, id: string, reason: string): Promise<voi
   await append(a.deps.env, a.project.id, () => ({ kind: "task-cut" as const, task: id, reason }));
   await finishSeat(a, task, `task ${id} cut`);
   if (task.mode === "parallel") {
-    await removeWorktree(a.project.root, task.workdir);
-    a.deps.out(`${id} cut; its branch ${task.branch} is kept`);
+    const removed = await removeWorktree(a.project.root, task.workdir);
+    a.deps.out(`${id} cut; its branch ${task.branch} is kept` +
+      (removed ? "" : `, and so is its worktree, which has uncommitted changes: ${task.workdir}`));
     return;
   }
   const dirty = await dirtyPaths(task.workdir);
@@ -241,23 +242,28 @@ export async function startReview(a: Actor, config: Config, target: { task: stri
     what = `lane ${lane.id}: ${lane.title}\nOutcome: ${lane.outcome}`;
     acceptance = lane.acceptance;
   }
-  const number = [...a.state.reviews.values()].filter((r) => r.lane === lane.id).length + 1;
-  const id = `${lane.id}-R${number}`;
-  await append(deps.env, project.id, () => ({
-    kind: "review-start" as const, lane: lane.id, review: id, target: target.task ?? lane.id, focus, seat: id,
-  }));
+  const started = await append(deps.env, project.id, (events) => {
+    const id = `${lane.id}-R${[...fold(events).reviews.values()].filter((r) => r.lane === lane.id).length + 1}`;
+    return { kind: "review-start" as const, lane: lane.id, review: id, target: target.task ?? lane.id, focus, seat: id };
+  });
+  const id = started.review;
   const text = [
     `Review ${what}`, "", "Acceptance:", ...acceptance.map((x) => `- ${x}`), "",
     `The change: slp diff ${target.task ?? lane.id}   (${range})`, `Working copy: ${cwd} (read only)`,
     ...(focus.trim() ? ["", `Focus: ${focus}`] : []),
   ].join("\n");
-  const opened = await openSeat(deps, project, config, {
-    name: id, role: "reviewer", lane: lane.id, task: target.task, cwd,
-    place: { kind: "split", from: a.seat.paneId, direction: "down" },
-    intro: intro(id, "reviewer", ` (lane ${lane.id})`, "claude"),
-    brief: { letter: "REVIEW", from: a.seat.name, text },
-  });
-  if (opened.attention) deps.out(`NEEDS ATTENTION: ${opened.attention}`);
+  try {
+    const opened = await openSeat(deps, project, config, {
+      name: id, role: "reviewer", lane: lane.id, task: target.task, cwd,
+      place: { kind: "split", from: a.seat.paneId, direction: "down" },
+      intro: intro(id, "reviewer", ` (lane ${lane.id})`, "claude"),
+      brief: { letter: "REVIEW", from: a.seat.name, text },
+    });
+    if (opened.attention) deps.out(`NEEDS ATTENTION: ${opened.attention}`);
+  } catch (error) {
+    await append(deps.env, project.id, () => ({ kind: "review-done" as const, review: id, summary: `not run: ${describe(error)}`, findings: [] }));
+    throw error;
+  }
 }
 
 export interface Finding { severity: "high" | "medium" | "low"; where: string; what: string; evidence: string }

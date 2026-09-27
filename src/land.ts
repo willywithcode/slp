@@ -2,7 +2,7 @@ import type { Deps } from "./core/deps.js";
 import { append, readLedger, type EventOf, type SlpEvent } from "./core/ledger.js";
 import type { Project } from "./core/project.js";
 import { detectGate, runGate, type GateResult } from "./gate.js";
-import { dirtyPaths, git, gitOk, head, mergeInto, squashCommit, treeOf, worktrees } from "./git.js";
+import { dirtyPaths, git, head, mergeInto, squashCommit, treeOf, worktrees } from "./git.js";
 import { teardownLane } from "./lanes.js";
 import { sendLetter } from "./letters.js";
 import { fold, leadOf, type Lane, type State } from "./state.js";
@@ -51,6 +51,13 @@ async function tell(deps: Deps, project: Project, state: State, lane: Lane, toSu
 export async function runRequest(deps: Deps, project: Project, req: EventOf<"request">): Promise<void> {
   const state = fold(await readLedger(deps.env, project.id));
   const lane = state.lanes.get(req.lane);
+  if (lane && !lane.open && lane.landed && req.what === "land") {
+    // Landed before a crash cut the rest short: finish tidying up.
+    const problems = await teardownLane(deps, project, lane, state);
+    await git(project.root, ["branch", "-D", lane.branch]);
+    await finish(deps, project, req.request, true, `landed as ${lane.commit?.slice(0, 10)}${problems.length ? `; ${problems.join("; ")}` : ""}`);
+    return;
+  }
   if (!lane || !lane.open) {
     await finish(deps, project, req.request, false, `lane ${req.lane} is not open`);
     return;
@@ -82,32 +89,45 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
     return fail(`${lane.base} is checked out at ${baseCheckout.path} with uncommitted changes; the Human must commit or stash them`, false);
   }
 
-  // Bring the lane up to date with base, so the gate tests what will land.
-  const upToDate = (await git(root, ["merge-base", "--is-ancestor", lane.base, lane.branch])).code === 0;
+  // Pin the base now: the lane is brought up to date with exactly this commit,
+  // the gate tests the result, and the squash goes on top of it. If the base
+  // moves meanwhile, the update below refuses rather than undo those commits.
+  const baseHead = await head(root, lane.base);
+  const upToDate = (await git(root, ["merge-base", "--is-ancestor", baseHead, lane.branch])).code === 0;
   if (!upToDate) {
-    const merged = await mergeInto(lane.workdir, lane.base, `Merge ${lane.base} into ${lane.branch}`);
+    const merged = await mergeInto(lane.workdir, baseHead, `Merge ${lane.base} into ${lane.branch}`);
     if (!merged.ok) return fail(`${lane.base} conflicts with the lane in ${merged.conflicts.join(", ")}; a Peer must reconcile them`, true);
   }
   const gate = await gateFor(deps, project, state, lane);
   if (gate && !gate.result.ok && !req.overGate) return fail(`the gate is red.\n\n${gateText(gate)}`, true);
 
-  const baseHead = await head(root, lane.base);
   let commit = baseHead;
   if ((await treeOf(root, lane.branch)) !== (await treeOf(root, baseHead))) {
     const message = `${lane.title}\n\n${lane.outcome}\n\nLanded by slp from lane ${lane.id} (${lane.branch}).` +
       (req.overGate ? `\nLanded over a red gate: ${req.note}` : "");
     commit = await squashCommit(root, lane.branch, baseHead, message);
-    if (baseCheckout) await gitOk(baseCheckout.path, ["merge", "--ff-only", commit]);
-    else await gitOk(root, ["update-ref", `refs/heads/${lane.base}`, commit, baseHead]);
+    const moved = async () => (await head(root, lane.base)) !== baseHead;
+    if (await moved()) return fail(`${lane.base} moved while the lane was being landed; land it again`, false);
+    const update = baseCheckout
+      ? await git(baseCheckout.path, ["merge", "--ff-only", commit])
+      : await git(root, ["update-ref", `refs/heads/${lane.base}`, commit, baseHead]);
+    if (update.code !== 0) {
+      return fail(await moved() ? `${lane.base} moved while the lane was being landed; land it again`
+        : `${lane.base} could not be moved: ${(update.stderr || update.stdout).trim()}`, false);
+    }
   }
-  await teardownLane(deps, project, lane, state);
-  await git(root, ["branch", "-D", lane.branch]);
+  // Recorded before tidying up, so a crash from here on is finished on restart.
   await append(deps.env, project.id, () => ({
     kind: "lane-close" as const, lane: lane.id, landed: true, reason: req.note, commit, overGate: req.overGate,
   }));
-  await finish(deps, project, req.request, true, `landed as ${commit.slice(0, 10)}`);
+  const problems = await teardownLane(deps, project, lane, state);
+  const deleted = await git(root, ["branch", "-D", lane.branch]);
+  if (deleted.code !== 0 && !problems.length) problems.push(`branch ${lane.branch} was kept: ${deleted.stderr.trim()}`);
+  await finish(deps, project, req.request, true, `landed as ${commit.slice(0, 10)}${problems.length ? `; ${problems.join("; ")}` : ""}`);
   const text = `${lane.id} landed on ${lane.base} as ${commit.slice(0, 10)}: ${lane.title}\n\n${gateText(gate)}` +
-    (commit === baseHead ? "\n\n(The lane changed nothing; no commit was made.)" : "");
+    (commit === baseHead ? "\n\n(The lane changed nothing; no commit was made.)" : "") +
+    (problems.length ? `\n\nThe Human must know:\n${problems.map((p) => `- ${p}`).join("\n")}` : "");
+  if (problems.length) await deps.herdr.notify(`slp: ${lane.id} landed, with loose ends`, problems.join("\n")).catch(() => undefined);
   await sendLetter(deps, project.id, { letter: "LANDED", from: "slp", to: state.seats.get("sup")?.live ? "sup" : "human", lane: lane.id, text })
     .catch((error: unknown) => deps.out(`could not tell the Supervisor: ${String(error)}`));
   await deps.herdr.notify(`slp: ${lane.id} landed`, `${lane.title} (${commit.slice(0, 10)}); not pushed`).catch(() => undefined);

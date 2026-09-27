@@ -2,10 +2,13 @@ import type { Deps } from "./core/deps.js";
 import { GoneError } from "./core/errors.js";
 import { append, readLedger, type SlpEvent } from "./core/ledger.js";
 import { loadProject, type Project } from "./core/project.js";
+import { loadConfig } from "./core/config.js";
 import { pendingRequests, runRequest } from "./land.js";
+import { teardownLane } from "./lanes.js";
 import { describe, pump, sendLetter } from "./letters.js";
 import { closeSeat } from "./seats.js";
 import { fold, liveSeats, superiorOf, type Seat, type State } from "./state.js";
+import { Observer } from "./watch/observer.js";
 
 // The watcher (ADR 0009): code, not a seat. It relays waiting letters, runs
 // gates and landings, and keeps the team moving with a few plain rules.
@@ -28,8 +31,11 @@ export class Watcher {
   private readonly missing = new Map<string, number>();
   /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
   private readonly dialogTold = new Set<string>();
+  private readonly observer: Observer;
 
-  constructor(private readonly deps: Deps, private readonly projectId: string) {}
+  constructor(private readonly deps: Deps, private readonly projectId: string) {
+    this.observer = new Observer(deps);
+  }
 
   private now(): number { return this.deps.now?.() ?? Date.now(); }
 
@@ -46,13 +52,29 @@ export class Watcher {
     for (const seat of [...this.dialogTold]) if (!pumped.atDialog.includes(seat)) this.dialogTold.delete(seat);
     this.startRequest(project, await readLedger(this.deps.env, project.id));
     const state = fold(await readLedger(this.deps.env, project.id));
+    await this.tidy(project, state);
     const agents = await this.deps.herdr.agentList().catch(() => null);
     if (agents) {
       const status = new Map(agents.map((a) => [a.paneId, a.status]));
       await this.checkPanes(project, state, status);
       await this.retire(project, state, status);
+      const config = await loadConfig(this.deps.env).catch((error: unknown) => {
+        this.deps.out(`watch: ${describe(error)}`);
+        return null;
+      });
+      if (config) await this.observer.observe(project, state, config, status);
     }
     await this.remindAsks(project, state);
+  }
+
+  /** A lane closed while its seats still run (a drop cut short by a crash): finish closing it. */
+  private async tidy(project: Project, state: State): Promise<void> {
+    if (this.inflight) return; // a landing in progress tidies its own lane
+    for (const lane of state.lanes.values()) {
+      if (lane.open || !liveSeats(state).some((s) => s.lane === lane.id)) continue;
+      const problems = await teardownLane(this.deps, project, lane, state);
+      this.deps.out(`closed the seats of ${lane.id}, which was already closed${problems.length ? `; ${problems.join("; ")}` : ""}`);
+    }
   }
 
   /** Wait for a gate or landing in progress (tests, shutdown). */

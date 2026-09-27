@@ -25,7 +25,7 @@ export function fold(events) {
             case "letter":
                 letters.set(e.seq, {
                     seq: e.seq, ts: e.ts, letter: e.letter, from: e.from, to: e.to, text: e.text, lane: e.lane, task: e.task,
-                    status: "unconfirmed", queueReason: null, error: null, lastAttemptAt: null,
+                    status: "unconfirmed", queueReason: null, error: null, lastAttemptAt: null, attempts: 0,
                 });
                 break;
             case "delivery": {
@@ -47,6 +47,7 @@ export function fold(events) {
                 }
                 else if (e.stage === "relaying") {
                     l.status = "relaying";
+                    l.attempts += 1;
                 }
                 else {
                     l.status = "failed";

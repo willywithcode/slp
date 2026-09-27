@@ -43,6 +43,10 @@ const ConfigSchema = z.object({
   version: z.literal(1),
   launchers: z.record(z.string(), Launcher),
   roles: z.record(Role, RoleConfig),
+  // The watch (ADR 0009): incidents are mailed to seats only once the owner
+  // turns mail on; at most budgetPerDay per recipient.
+  watch: z.object({ mail: z.boolean().default(false), budgetPerDay: z.number().int().positive().default(20) })
+    .default({ mail: false, budgetPerDay: 20 }),
 }).superRefine((c, ctx) => {
   for (const [role, rc] of Object.entries(c.roles)) {
     for (const name of [...rc.use, ...Object.values(rc.presets).flatMap((p) => (p.launcher ? [p.launcher] : []))]) {
@@ -89,6 +93,7 @@ export function defaultConfig(platform: string = process.platform): Config {
   if (platform === "win32") {
     return {
       version: 1,
+      watch: { mail: false, budgetPerDay: 20 },
       launchers: {
         claude: { agent: "claude", env: {}, prep: {} },
         "claude-acc1": claudeToken("acc1"),
@@ -109,6 +114,7 @@ export function defaultConfig(platform: string = process.platform): Config {
   }
   return {
     version: 1,
+    watch: { mail: false, budgetPerDay: 20 },
     launchers: {
       claude: { agent: "claude", env: {}, prep: {} },
       codex: { agent: "codex", env: {}, prep: {} },

@@ -133,7 +133,16 @@ export class FakeHerdrCli {
       return ok({ agents: [...this.agents].map(([pane_id, a]) => ({ pane_id, agent_status: a.status, agent: a.kind, state_change_seq: 1 })) });
     }
     if (group === "agent" && action === "read") return { code: 0, stdout: this.screens.get(args[2]!) ?? "> ready", stderr: "" };
-    if (group === "agent" && action === "send-keys") { this.keys.push({ target: args[2]!, keys: args.slice(3) }); return ok({}); }
+    if (group === "agent" && action === "send-keys") {
+      this.keys.push({ target: args[2]!, keys: args.slice(3) });
+      // Enter submits text left in the input box.
+      if (args.includes("enter") && this.screens.get(args[2]!)?.includes("Pasted text")) {
+        this.screens.delete(args[2]!);
+        const agent = this.agents.get(args[2]!);
+        if (agent) agent.status = "working";
+      }
+      return ok({});
+    }
     if (group === "notification" && action === "show") {
       this.notifications.push({ title: args[2]!, body: flag("--body") });
       return ok({});
@@ -168,7 +177,11 @@ export class World {
 
   deps(pane: string | null = "w1:p0", now?: () => number): Deps {
     return {
-      env: { SLP_HOME: this.home, HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t1", ...(pane ? { HERDR_PANE_ID: pane } : {}) },
+      env: {
+        SLP_HOME: this.home, HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t1", ...(pane ? { HERDR_PANE_ID: pane } : {}),
+        // Transcripts are looked for here, never in the real homes.
+        CLAUDE_CONFIG_DIR: join(this.home, "claude"), CODEX_HOME: join(this.home, "codex"),
+      },
       herdr: new Herdr(this.cli.exec, "herdr"),
       out: (line) => { this.out.push(line); },
       ...(now ? { now } : {}),

@@ -51,9 +51,21 @@ export async function worktrees(repo) {
 export async function addWorktree(repo, path, branch, from) {
     await gitOk(repo, ["worktree", "add", "-b", branch, path, from]);
 }
+/**
+ * Remove a worktree slp made, only if it holds no uncommitted work (git
+ * refuses otherwise). Returns false when it was kept. A worktree already
+ * gone counts as removed.
+ */
 export async function removeWorktree(repo, path) {
-    await git(repo, ["worktree", "remove", "--force", path]);
+    const r = await git(repo, ["worktree", "remove", path]);
     await git(repo, ["worktree", "prune"]);
+    if (r.code === 0)
+        return true;
+    return !(await worktrees(repo)).some((w) => samePath(w.path, path));
+}
+function samePath(a, b) {
+    const norm = (p) => p.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+    return norm(a) === norm(b);
 }
 /** Merge `from` into the branch checked out at `cwd`; aborts and reports on conflict. */
 export async function mergeInto(cwd, from, message) {

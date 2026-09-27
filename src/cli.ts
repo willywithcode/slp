@@ -16,7 +16,7 @@ import { writeAtomic } from "./core/fsutil.js";
 import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
 import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
-import { closeLane, render, resendIntro, setProject, start, stop } from "./team.js";
+import { closeLane, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
 import { Watcher } from "./watcher.js";
 
 const USAGE = `slp: a Supervisor, Leads and Peers working on your repository through Herdr
@@ -51,6 +51,9 @@ type Values = ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositi
 type TextArg = (arg: string | undefined) => Promise<string>;
 type Arity = (n: number, m?: number) => void;
 
+/** Commands only the Human runs, never a seat. */
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch"]);
+
 /** Verbs only a seat runs; everything else is the Human's. */
 const SEAT_VERBS = new Set([
   "whoami", "context", "diff", "test", "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat",
@@ -83,6 +86,11 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
     const me = await whoAmI(deps.env);
     if (!mayRun(me.seat.role, command)) throw new SlpError(`The ${me.seat.role} does not run \`slp ${command}\`; see \`slp guide\`.`);
     return seatVerb(command, args, values, { deps, project: me.project, state: me.state, seat: me.seat }, text, arity);
+  }
+  // The Human's own commands are not for seats: an agent could stop the whole team.
+  if (HUMAN_ONLY.has(command)) {
+    const me = await whoAmI(deps.env).catch(() => null);
+    if (me) throw new SlpError(`\`slp ${command}\` is the Human's command; the ${me.seat.role} does not run it. See \`slp guide\`.`);
   }
 
   switch (command) {
@@ -206,8 +214,7 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
       await append(deps.env, a.project.id, () => ({ kind: "ack" as const, incident: args[0]!, by: a.seat.name, verdict, note: args[2] ?? "" }));
       return 0;
     }
-    case "move-seat":
-      throw new SlpError("move-seat is not available yet.");
+    case "move-seat": arity(2); await moveSeatVerb(a, await loadConfig(deps.env), args[0]!, args[1]!); return 0;
     case "start-task":
       arity(0);
       await startTask(a, await loadConfig(deps.env), {

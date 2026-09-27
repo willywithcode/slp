@@ -4,12 +4,14 @@ import { append, nextId, readLedger } from "./core/ledger.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { contextPath, ensureProject, saveProject } from "./core/project.js";
 import { detectGate } from "./gate.js";
-import { toplevel } from "./git.js";
+import { commonDir, toplevel } from "./git.js";
 import { intro } from "./guide.js";
 import { pendingRequests } from "./land.js";
 import { dropLane } from "./lanes.js";
 import { sendLetter, watchLockPath } from "./letters.js";
-import { closeSeat, detectShell, openSeat } from "./seats.js";
+import { closeSeat, detectShell, moveSeat, openSeat } from "./seats.js";
+import { codexHomes } from "./watch/observer.js";
+import { codexSessionId, findCodexRollout } from "./watch/transcripts.js";
 import { fold, liveSeats } from "./state.js";
 // The Human's commands (start, stop, status) and the Supervisor's lane
 // closing and project settings.
@@ -195,4 +197,29 @@ export function render(project, state, now, contextFile) {
     }
     lines.push("", `concept: ${contextFile}`);
     return lines.join("\n");
+}
+/** The Supervisor moves a seat whose account ran out to another (ADR 0011). */
+export async function moveSeatVerb(a, config, name, launcher) {
+    const seat = a.state.seats.get(name);
+    if (!seat?.live)
+        throw new SlpError(`No live seat "${name}"`);
+    if (seat.name === "sup")
+        throw new SlpError("The Supervisor's own seat moves only by the Human (restart it on another account).");
+    const status = await a.deps.herdr.agentStatus(seat.paneId).catch(() => null);
+    if (status === "working")
+        throw new SlpError(`${name} is working; move it when its turn has ended.`);
+    let resume = seat.sessionId;
+    if (seat.agent === "codex" && seat.marker) {
+        const path = await findCodexRollout(codexHomes(config, a.deps.env, seat.launcher), seat.marker, new Date(seat.openedAt));
+        resume = path ? await codexSessionId(path) : null;
+    }
+    if (!resume)
+        throw new SlpError(`No session of ${name} was found to resume; cut its task and start a new one instead.`);
+    const task = seat.task ? a.state.tasks.get(seat.task) : undefined;
+    const lane = seat.lane ? a.state.lanes.get(seat.lane) : undefined;
+    const cwd = task?.workdir ?? lane?.workdir ?? a.project.root;
+    const writableDirs = seat.role === "peer" ? [await commonDir(a.project.root)] : [];
+    const moved = await moveSeat(a.deps, a.project, config, seat, { launcher, cwd, resume, writableDirs });
+    if (moved.attention)
+        a.deps.out(`NEEDS ATTENTION: ${moved.attention}`);
 }

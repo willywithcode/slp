@@ -41,6 +41,8 @@ export interface LaunchContext {
   effort: string | null;
   /** Claude: fixed transcript id (ADR 0009). */
   sessionId: string | null;
+  /** A session to resume instead of starting one (a seat moved to another account, ADR 0011). */
+  resume?: string | null;
   /** Codex: a directory unique to this seat, found in its rollout metadata. */
   markerDir: string | null;
   slpHome: string;
@@ -56,7 +58,7 @@ export function agentArgs(agent: Agent, c: LaunchContext): string[] {
     const args = [
       ...(c.model ? ["--model", c.model] : []),
       ...(c.effort ? ["--effort", c.effort] : []),
-      ...(c.sessionId ? ["--session-id", c.sessionId] : []),
+      ...(c.resume ? ["--resume", c.resume] : c.sessionId ? ["--session-id", c.sessionId] : []),
       // ADR 0004: only slp runs without a prompt; everything else still asks.
       "--allowedTools", "Bash(slp *)", "Bash(slp.cmd *)",
     ];
@@ -67,6 +69,7 @@ export function agentArgs(agent: Agent, c: LaunchContext): string[] {
   }
   if (agent === "codex") {
     return [
+      ...(c.resume ? ["resume", c.resume] : []),
       // ADR 0004: own process (sees its pane's HERDR_PANE_ID); workspace-write
       // so --add-dir is honoured and a Peer can edit code.
       "--no-daemon", "--sandbox", "workspace-write",
