@@ -19,6 +19,7 @@ Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
 - [0010](0010-team-rules-location.md) Team rules live in seat prompts and the mustang skill
 - [0011](0011-accounts-and-models.md) Accounts and models per seat, managed by the Supervisor
 - [0012](0012-herdr-is-the-backbone.md) Herdr is the backbone: seats open and talk only through Herdr
+- [0013](0013-jev-is-optional.md) slp works fully without Jev
 
 ## Add A Decision When
 
