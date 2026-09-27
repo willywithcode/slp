@@ -111,6 +111,10 @@ export const EventSchema = z.discriminatedUnion("kind", [
         kind: z.literal("ack"), ...base, incident: z.string(), by: z.string(),
         verdict: z.enum(["useful", "noise", "unknown"]), note: text,
     }),
+    // A permission prompt the Supervisor answered for the Human (ADR 0016).
+    z.object({
+        kind: z.literal("permit"), ...base, seat: z.string(), allow: z.boolean(), why: text, by: z.string(), prompt: text,
+    }),
     // Jev (phases 5-6): one recorded decision.
     z.object({
         kind: z.literal("jev"), ...base, point: z.string(), subject: z.string(), mode: z.enum(["shadow", "act"]),

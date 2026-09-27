@@ -53,3 +53,11 @@ export function readyProbe(family: ShellFamily, nonce: string): { command: strin
 export function joinCommands(family: ShellFamily, commands: readonly string[]): string {
   return commands.join(family === "cmd" ? " & " : "; ");
 }
+
+/** A command that puts `dir` first on PATH in the given shell. */
+export function pathPrepend(family: ShellFamily, dir: string): string {
+  if (family === "powershell") return `$env:PATH = ${quotePs(`${dir};`)} + $env:PATH`;
+  if (family === "sh") return `export PATH=${quoteSh(dir)}:"$PATH"`;
+  if (/["^&|<>%]/.test(dir)) throw new SlpError(`Cannot put ${dir} on PATH safely in cmd.exe`);
+  return `set "PATH=${dir};%PATH%"`;
+}

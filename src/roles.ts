@@ -19,7 +19,7 @@ const COMMON = ["guide", "whoami", "status", "context"] as const;
 
 export const ROLE_SPECS: Record<Role, RoleSpec> = {
   supervisor: {
-    verbs: [...COMMON, "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat"],
+    verbs: [...COMMON, "message", "open-lane", "amend-lane", "close-lane", "set-project", "answer", "incidents", "ack", "move-seat", "permit"],
     watched: false, readOnly: true, editsContext: true,
   },
   lead: {
@@ -47,24 +47,22 @@ export interface LaunchContext {
   markerDir: string | null;
   slpHome: string;
   projectDir: string;
+  /** Claude: the role's settings file (permissions and sandbox). */
+  settingsPath?: string | null;
   /** More directories the agent must write to (a worktree's git directory). */
   writableDirs?: readonly string[];
 }
 
 /** Native arguments for `herdr agent start -- <args>`. */
 export function agentArgs(agent: Agent, c: LaunchContext): string[] {
-  const spec = ROLE_SPECS[c.role];
   if (agent === "claude") {
     const args = [
       ...(c.model ? ["--model", c.model] : []),
       ...(c.effort ? ["--effort", c.effort] : []),
       ...(c.resume ? ["--resume", c.resume] : c.sessionId ? ["--session-id", c.sessionId] : []),
-      // ADR 0004: only slp runs without a prompt; everything else still asks.
-      "--allowedTools", "Bash(slp *)", "Bash(slp.cmd *)",
+      // ADR 0016: the role's permissions (allow, deny, sandbox) come in one settings file.
+      ...(c.settingsPath ? ["--settings", c.settingsPath] : []),
     ];
-    if (spec.readOnly && c.role !== "supervisor" && c.role !== "lead") {
-      args.push("--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit");
-    }
     return args;
   }
   if (agent === "codex") {
@@ -73,6 +71,8 @@ export function agentArgs(agent: Agent, c: LaunchContext): string[] {
       // ADR 0004: own process (sees its pane's HERDR_PANE_ID); workspace-write
       // so --add-dir is honoured and a Peer can edit code.
       "--no-daemon", "--sandbox", "workspace-write",
+      // ADR 0016, as seatworks: never ask inside the sandbox; the network is open, the git shim refuses push.
+      "--ask-for-approval", "never", "-c", "sandbox_workspace_write.network_access=true",
       ...(c.model ? ["-m", c.model] : []),
       ...(c.effort ? ["-c", `model_reasoning_effort=${c.effort}`] : []),
       "--add-dir", c.slpHome,

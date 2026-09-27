@@ -47,6 +47,9 @@ const ConfigSchema = z.object({
   // turns mail on; at most budgetPerDay per recipient.
   watch: z.object({ mail: z.boolean().default(false), budgetPerDay: z.number().int().positive().default(20) })
     .default({ mail: false, budgetPerDay: 20 }),
+  // The Human in the loop (ADR 0016, as seatworks' hitl): off, the Supervisor
+  // answers seats' permission prompts for the Human; on, the Human does.
+  human: z.object({ inLoop: z.boolean().default(false) }).default({ inLoop: false }),
   // Jev (ADR 0013): off, shadow (record only) or on (act where calibrated).
   // Thresholds are set by `slp calibrate`, keyed "<point>.<question>".
   jev: z.object({
@@ -102,6 +105,7 @@ export function defaultConfig(platform: string = process.platform): Config {
       version: 1,
       watch: { mail: false, budgetPerDay: 20 },
       jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
+      human: { inLoop: false },
       launchers: {
         claude: { agent: "claude", env: {}, prep: {} },
         "claude-acc1": claudeToken("acc1"),
@@ -124,6 +128,7 @@ export function defaultConfig(platform: string = process.platform): Config {
     version: 1,
     watch: { mail: false, budgetPerDay: 20 },
     jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
+    human: { inLoop: false },
     launchers: {
       claude: { agent: "claude", env: {}, prep: {} },
       codex: { agent: "codex", env: {}, prep: {} },

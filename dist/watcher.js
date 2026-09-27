@@ -2,6 +2,7 @@ import { GoneError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { loadProject } from "./core/project.js";
 import { loadConfig } from "./core/config.js";
+import { pendingPrompt } from "./permit.js";
 import { pendingRequests, runRequest } from "./land.js";
 import { teardownLane } from "./lanes.js";
 import { describe, pump, sendLetter } from "./letters.js";
@@ -20,6 +21,8 @@ export const watchTiming = {
     askReminders: 3,
     /** Ticks a live seat's pane may be missing from Herdr before it counts as gone. */
     goneTicks: 3,
+    /** A permission prompt the Supervisor answers is passed on after this long (it may clear by itself). */
+    permitAfterMs: 20_000,
 };
 export class Watcher {
     deps;
@@ -72,12 +75,12 @@ export class Watcher {
         const agents = await this.deps.herdr.agentList().catch(() => null);
         if (agents) {
             const status = new Map(agents.map((a) => [a.paneId, a.status]));
-            await this.checkPanes(project, state, status);
-            await this.retire(project, state, status);
             const config = await loadConfig(this.deps.env).catch((error) => {
                 this.deps.out(`watch: ${describe(error)}`);
                 return null;
             });
+            await this.checkPanes(project, state, status, config);
+            await this.retire(project, state, status);
             if (config) {
                 await this.observer.observe(project, state, config, status);
                 await this.desk.timers(project, state, status);
@@ -128,7 +131,7 @@ export class Watcher {
             .catch((error) => this.deps.out(`could not tell ${target}: ${describe(error)}`));
     }
     /** Seats whose pane is gone, or stuck on a prompt only the Human can answer. */
-    async checkPanes(project, state, status) {
+    async checkPanes(project, state, status, config) {
         for (const seat of liveSeats(state)) {
             const s = status.get(seat.paneId);
             if (s === undefined) {
@@ -145,13 +148,24 @@ export class Watcher {
             if (s === "blocked") {
                 const since = this.blockedSince.get(seat.name) ?? this.now();
                 this.blockedSince.set(seat.name, since);
-                if (this.now() - since >= watchTiming.blockedMs && !this.blockedTold.has(seat.name)) {
-                    this.blockedTold.add(seat.name);
-                    await this.deps.herdr.notify(`slp: ${seat.name} waits on you`, `A prompt in pane ${seat.paneId} needs the Human.`).catch(() => undefined);
-                    const up = superiorOf(state, seat);
-                    if (up) {
-                        await this.tell(project, state, up, `${seat.name} has waited on a prompt in its pane for ${Math.round((this.now() - since) / 60_000)} min; the Human was notified.`, seat.lane);
-                    }
+                if (this.blockedTold.has(seat.name))
+                    continue;
+                // A permission prompt goes to the Supervisor while the Human is out of the loop (ADR 0016);
+                // anything else, and the Supervisor's own prompts, to the Human.
+                const prompt = await pendingPrompt(this.deps, seat.paneId);
+                const toSup = prompt !== null && config !== null && !config.human.inLoop && seat.name !== "sup" && state.seats.get("sup")?.live === true;
+                if (this.now() - since < (toSup ? watchTiming.permitAfterMs : watchTiming.blockedMs))
+                    continue;
+                this.blockedTold.add(seat.name);
+                if (toSup) {
+                    await this.tell(project, state, "sup", `${seat.name} asks permission for:\n${prompt}\n\n` +
+                        `Answer it for the Human: \`slp permit ${seat.name} allow "why"\` or \`slp permit ${seat.name} deny "why"\`.`, seat.lane);
+                    continue;
+                }
+                await this.deps.herdr.notify(`slp: ${seat.name} waits on you`, prompt ?? `A prompt in pane ${seat.paneId} needs the Human.`).catch(() => undefined);
+                const up = superiorOf(state, seat);
+                if (up) {
+                    await this.tell(project, state, up, `${seat.name} has waited on a prompt in its pane for ${Math.round((this.now() - since) / 60_000)} min; the Human was notified.`, seat.lane);
                 }
             }
             else {

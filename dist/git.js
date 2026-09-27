@@ -1,9 +1,17 @@
 import { execFile } from "node:child_process";
+import { delimiter } from "node:path";
 import { SlpError } from "./core/errors.js";
+import { isShimDir } from "./permissions.js";
+/** slp's own git never goes through a seat's shim (a seat's `slp accept` merges for it). */
+function gitEnv() {
+    const key = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+    const path = (process.env[key] ?? "").split(delimiter).filter((entry) => !isShimDir(entry)).join(delimiter);
+    return { ...process.env, [key]: path };
+}
 /** Run git in `cwd`. Never throws for a non-zero exit; callers decide. */
 export function git(cwd, args) {
     return new Promise((resolve) => {
-        execFile("git", [...args], { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+        execFile("git", [...args], { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: gitEnv() }, (error, stdout, stderr) => {
             const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
             resolve({ code, stdout: String(stdout), stderr: error && !stderr ? error.message : String(stderr) });
         });
