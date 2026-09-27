@@ -120,8 +120,10 @@ actionable findings, docs and ADRs current.
 4. **Watch v2**: transcript readers, facts, ledger shapes, incident book,
    usage-limit detection routed to the Supervisor, which may move the seat
    to another account (the session is resumed there).
-5. **Jev sensor** and `slp calibrate`.
-6. **Jev loop control** in shadow, then enforced above calibrated thresholds.
+5. **Jev sensor** and `slp calibrate` (catalogue items 17-20).
+6. **Jev loop control**: catalogue items 1-16 in the priority order of
+   `docs/product/jev-decisions.md`, each with its fallback built first
+   (ADR 0013), in shadow, then enforced above calibrated thresholds.
 7. **Release**: mustang skill renamed and rewritten as `slp`, workflow docs,
    v0.3.0, mustang release.
 
@@ -155,6 +157,9 @@ actionable findings, docs and ADRs current.
 - 2026-09-27: Owner rule: all communication between roles goes through
   Herdr; seats are opened with `herdr agent start` (ADR 0012).
 - 2026-09-27: Seats open in the Human's workspace, one tab per lane.
+- 2026-09-27: Jev catalogue of 20 decision points accepted; slp must work
+  fully without Jev (ADR 0013). Phases 1-4 are built and live-tested
+  without Jev; fallbacks exist before any Jev question.
 - 2026-09-27: The local folder is still named `spl` (held open by another
   process); rename when free.
 

@@ -12,6 +12,8 @@ files after actual product domains, such as `overview.md`, `billing.md`,
 
 - [overview.md](overview.md): roles, communication and supervision contract,
   platforms.
+- [jev-decisions.md](jev-decisions.md): every Jev question in the workflow,
+  what it does above its threshold, and its fallback without Jev.
 - [workflow.md](workflow.md): working with and without slp, step by step,
   with alert runbook, example and troubleshooting.
 
