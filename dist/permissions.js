@@ -29,7 +29,7 @@ function bashDeny(subcommands) {
 const SEAT_DENY = [
     "Agent", "Workflow", "EnterWorktree", "ExitWorktree", "CronCreate", "CronDelete", "ScheduleWakeup", "SendMessage",
     "Read(~/.claude/.credentials.json)", "Edit(~/.claude/**)", "Read(~/.codex/auth.json)", "Read(~/.codex-*/auth.json)",
-    "Edit(~/.codex/**)", "Edit(~/.codex-*/**)", "Read(~/.secrets/**)", "Edit(~/.secrets/**)", "Edit(~/.slp/**)",
+    "Edit(~/.codex/**)", "Edit(~/.codex-*/**)", "Read(~/.secrets/**)", "Edit(~/.secrets/**)", "Edit(~/.slp/**)", "Read(~/.slp/.env)",
     "Edit(~/.gitconfig)", "Edit(~/.config/git/**)",
     "Bash(git branch -f *)", "Bash(git branch -D *)", "Bash(git branch --force *)",
 ];

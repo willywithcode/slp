@@ -6,6 +6,7 @@ import { GoneError, SlpError } from "./core/errors.js";
 import { append, readLedger, Role } from "./core/ledger.js";
 import { acquireLock, releaseLock } from "./core/lock.js";
 import { configPath, type Env } from "./core/paths.js";
+import { dotenvPath, withDotenv } from "./core/dotenv.js";
 import { contextPath, loadProject, rootFor } from "./core/project.js";
 import { guide } from "./guide.js";
 import { Herdr } from "./herdr.js";
@@ -143,7 +144,7 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
       await redeliver(deps, project.id, me ? me.seat.name : null, seq, values.force === true);
       return 0;
     }
-    case "config": arity(0); await loadConfig(deps.env); deps.out(configPath(deps.env)); return 0;
+    case "config": arity(0); await loadConfig(deps.env); deps.out(configPath(deps.env)); deps.out(`${dotenvPath(deps.env)} (keys such as JEV_API_KEY)`); return 0;
     case "calibrate": {
       arity(0);
       const { project } = await projectHere(deps.env, cwd);
@@ -377,6 +378,8 @@ export function decodeText(bytes: Buffer): string {
 export async function run(argv: string[], env: Env): Promise<number> {
   const deps: Deps = { env, herdr: new Herdr(), out: (line) => console.log(line) };
   try {
+    // slp's own keys (Jev) from ~/.slp/.env, under the environment.
+    deps.env = await withDotenv(env);
     return await main(argv, deps);
   } catch (error) {
     if (error instanceof UsageError || (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS")) {

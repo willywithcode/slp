@@ -36,7 +36,7 @@ by live Herdr runs on Windows with Claude Code and Codex seats.
 The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.2.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.3.tar.gz
 slp help
 ```
 
@@ -127,8 +127,17 @@ worktree only see committed files (ADR 0017).
 
 ## Jev (optional)
 
-Set `JEV_API_KEY` (TypeSafe) or `OPENROUTER_API_KEY` (OpenRouter) in the
-environment of the terminal that runs `slp start`. Jev starts in shadow mode
+Put the key in `~/.slp/.env` (outside every repository; on macOS and Linux
+`chmod 600` it, or slp refuses it):
+
+```
+JEV_API_KEY=...            # TypeSafe
+# OPENROUTER_API_KEY=...   # or OpenRouter
+```
+
+An environment variable of the same name wins over the file. slp reads the
+file for its own processes only; no seat is given it, and Claude seats are
+denied reading it. Jev starts in shadow mode
 (`"jev": { "mode": "shadow" }`): its readings are recorded and shown as
 unmailed incidents that you and the seats mark. `slp calibrate` turns the
 marks into thresholds; with `"mode": "on"` a reading acts only above its

@@ -144,7 +144,8 @@ the marks are how Jev earns thresholds.
 
 ### 8. Optional: Jev
 
-Set `JEV_API_KEY` or `OPENROUTER_API_KEY` before `slp start`. In shadow mode
+Put `JEV_API_KEY=...` (or `OPENROUTER_API_KEY=...`) in `~/.slp/.env`, then
+`slp stop` and `slp start`. In shadow mode
 (default) Jev's readings are recorded and appear as unmailed incidents; mark
 them, run `slp calibrate`, and set `"jev": { "mode": "on" }` when the
 thresholds look right. Every decision point has a code fallback, so nothing
