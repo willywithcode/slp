@@ -203,7 +203,7 @@ describe("landing holds (catalogue 6, 16)", () => {
     await w.as("sup", ["close-lane", "L1", "--land"]);
     await w.slp(["watch", "--once", "--project", w.project]);
     const held = (await w.inbox("sup")).at(-1)!;
-    expect(held).toMatch(/held for the Human: it is a high-risk lane[\s\S]*changes migrations[\s\S]*destructive SQL/);
+    expect(held).toMatch(/held for the Human \[at [0-9a-f]{40}\]: it is a high-risk lane[\s\S]*changes migrations[\s\S]*destructive SQL/);
     expect(w.cli.notifications.some((n) => n.title.includes("L1 held for you"))).toBe(true);
     expect((await w.state()).lanes.get("L1")!.open).toBe(true);
     w.cli.idleAll();

@@ -179,7 +179,13 @@ export async function teardownLane(deps: Deps, project: Project, lane: Lane, sta
   if (tab && tab !== project.mainTabId) await deps.herdr.tabClose(tab).catch(() => undefined);
   for (const task of state.tasks.values()) {
     if (task.lane !== lane.id || task.mode !== "parallel") continue;
-    if (!(await removeWorktree(project.root, task.workdir))) problems.push(`${task.id}'s worktree has uncommitted changes and was kept: ${task.workdir}`);
+    if (!(await removeWorktree(project.root, task.workdir))) {
+      problems.push(`${task.id}'s worktree has uncommitted changes and was kept: ${task.workdir}`);
+      continue;
+    }
+    // A task branch with no commits of its own holds nothing worth keeping.
+    const own = await git(project.root, ["rev-list", "--count", `${task.baseCommit}..${task.branch}`]);
+    if (own.code === 0 && own.stdout.trim() === "0") await git(project.root, ["branch", "-D", task.branch]);
   }
   if (lane.inCheckout) {
     // Only if the checkout is still on this lane's branch; never move the Human elsewhere.

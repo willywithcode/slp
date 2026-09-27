@@ -168,7 +168,9 @@ export class Observer {
       const done = task.lastDone;
       const known = peer ? this.seats.get(peer.name) : undefined;
       // Check once the Peer's transcript has been read, or give up waiting for it.
-      const readable = Boolean(known?.tail) || (done !== null && this.now() - Date.parse(done.ts) > observeTiming.handbackWaitMs);
+      // Its own `slp done` in the transcript shows the steps before it have been read.
+      const seen = known?.steps.some((x) => x.kind === "command" && /\bslp(\.cmd)?\s+done\b/.test(x.text)) ?? false;
+      const readable = seen || (done !== null && this.now() - Date.parse(done.ts) > observeTiming.handbackWaitMs);
       if (done && done.outcome === "complete" && readable && !this.checkedDone.has(`${done.seq}`)) {
         this.checkedDone.add(`${done.seq}`);
         const steps = known?.steps;

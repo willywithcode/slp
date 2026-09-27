@@ -64,12 +64,17 @@ export function envelope(l: Pick<Letter, "seq" | "letter" | "from" | "lane" | "t
  */
 const STARTUP_DIALOG = /Trust this folder\?|Trust and continue|Yes, I trust this folder|a project you created or one you trust|Do you trust the (?:files|contents)/i;
 
-export async function atStartupDialog(deps: Deps, paneId: string): Promise<boolean> {
-  // A screen that cannot be read might show a dialog: hold rather than type blind.
+/** What a pane's screen says about typing into it now. */
+export async function screenState(deps: Deps, paneId: string): Promise<"clear" | "dialog" | "unreadable"> {
   const screen = await deps.herdr.agentRead(paneId).catch(() => null);
-  if (screen === null) return true;
+  if (screen === null) return "unreadable";
   const bottom = screen.split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n");
-  return STARTUP_DIALOG.test(bottom);
+  return STARTUP_DIALOG.test(bottom) ? "dialog" : "clear";
+}
+
+/** A screen that shows a dialog, or cannot be read (it might): hold rather than type blind. */
+export async function atStartupDialog(deps: Deps, paneId: string): Promise<boolean> {
+  return (await screenState(deps, paneId)) !== "clear";
 }
 
 export function watchLockPath(env: Deps["env"], project: string): string {
@@ -196,7 +201,7 @@ class NotQueued extends Error {}
  * ("relaying", checked under the ledger lock), so an interrupted pump leaves
  * it unconfirmed rather than sending it twice.
  */
-export async function pump(deps: Deps, project: string): Promise<{ delivered: number; atDialog: string[] }> {
+export async function pump(deps: Deps, project: string): Promise<{ delivered: number; atDialog: string[]; unreadable: string[] }> {
   const state = fold(await readLedger(deps.env, project));
   const byTarget = new Map<string, Letter[]>();
   for (const l of state.letters) {
@@ -205,12 +210,15 @@ export async function pump(deps: Deps, project: string): Promise<{ delivered: nu
   }
   let delivered = 0;
   const atDialog: string[] = [];
+  const unreadable: string[] = [];
   for (const [to, letters] of byTarget) {
     const target = state.seats.get(to);
     if (!target || !target.live) continue;
     const status = await deps.herdr.agentStatus(target.paneId).catch(() => null);
     if (status === "working" || status === "blocked") continue;
-    if (await atStartupDialog(deps, target.paneId)) { atDialog.push(to); continue; }
+    const screen = await screenState(deps, target.paneId);
+    if (screen === "dialog") { atDialog.push(to); continue; }
+    if (screen === "unreadable") { unreadable.push(to); continue; }
     const claimed: Letter[] = [];
     for (const l of letters) {
       const ok = await append(deps.env, project, (events) => {
@@ -244,7 +252,7 @@ export async function pump(deps: Deps, project: string): Promise<{ delivered: nu
     if (error === null) delivered += claimed.length;
     deps.out(error === null ? `delivered ${claimed.length} waiting letter(s) to ${to}` : `could not deliver waiting letters to ${to}: ${error}${retry ? " (will retry)" : ""}`);
   }
-  return { delivered, atDialog };
+  return { delivered, atDialog, unreadable };
 }
 
 /** How many times the watcher tries one letter before it counts as failed. */

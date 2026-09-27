@@ -111,7 +111,10 @@ export class JevDesk {
         continue;
       }
       // Waiting on an answer is not idling: the clock starts again once it comes.
-      if ([...state.asks.values()].some((a) => a.from === name && a.answer === null)) { turn.at = this.now(); continue; }
+      if ([...state.asks.values()].some((a) => a.from === name && a.answer === null)) {
+        Object.assign(turn, { at: this.now(), nudged: false, escalated: false });
+        continue;
+      }
       const idle = this.now() - turn.at;
       if (!turn.nudged && idle >= deskTiming.nudgeMs) {
         turn.nudged = true;
@@ -234,17 +237,15 @@ export class JevDesk {
   }
 }
 
-/** Catalogue 19: a first pass over the lane for the Critic (context only). */
-export async function criticPrefilter(deps: Deps, project: string, config: Config, lane: { id: string; acceptance: string[]; humanWords: string }, concept: string): Promise<string | null> {
-  if (!lane.acceptance.length) return null;
-  const reading = await consult(deps, project, config, "critic", lane.id, { humanWords: clip(lane.humanWords, 4000), concept: clip(concept, 4000), acceptance: lane.acceptance }, criticQuestions(lane.acceptance));
-  if (!reading) return null;
-  // Only a calibrated first pass reaches the Critic; in shadow it is recorded, not shown.
-  const threshold = config.jev.thresholds["critic.prefilter"];
-  if (config.jev.mode !== "on" || threshold === undefined) return null;
-  const lines = lane.acceptance.flatMap((item, i) => {
-    const a = reading.answers[`item_${i + 1}`];
-    return a && a.choice !== "none" && a.choice !== "unsure" && a.confidence >= threshold ? [`- "${item}": possibly ${a.choice} (${a.confidence.toFixed(2)})`] : [];
-  });
-  return lines.length ? `A machine first pass (Jev) flagged these; check them yourself, they may be wrong:\n${lines.join("\n")}` : null;
+/**
+ * Catalogue 19: a first pass over the lane for the Critic. Recorded only in
+ * v0.3: its readings have no incidents to mark, so it cannot be calibrated,
+ * and an uncalibrated reading must not steer the Critic. The Critic works
+ * alone (the fallback).
+ */
+export async function criticPrefilter(deps: Deps, project: string, config: Config, lane: { id: string; acceptance: string[]; humanWords: string }, concept: string): Promise<null> {
+  if (lane.acceptance.length) {
+    await consult(deps, project, config, "critic", lane.id, { humanWords: clip(lane.humanWords, 4000), concept: clip(concept, 4000), acceptance: lane.acceptance }, criticQuestions(lane.acceptance));
+  }
+  return null;
 }

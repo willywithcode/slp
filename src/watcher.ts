@@ -57,7 +57,13 @@ export class Watcher {
       this.dialogTold.add(seat);
       await this.deps.herdr.notify(`slp: ${seat} waits on you`, "A startup dialog (folder trust) in its pane needs the Human; its letters wait.").catch(() => undefined);
     }
-    for (const seat of [...this.dialogTold]) if (!pumped.atDialog.includes(seat)) this.dialogTold.delete(seat);
+    for (const seat of pumped.unreadable) {
+      if (this.dialogTold.has(seat)) continue;
+      this.dialogTold.add(seat);
+      await this.deps.herdr.notify(`slp: cannot read ${seat}'s screen`, "Its letters wait until slp can see the pane is clear (Herdr may be busy).").catch(() => undefined);
+    }
+    const waiting = [...pumped.atDialog, ...pumped.unreadable];
+    for (const seat of [...this.dialogTold]) if (!waiting.includes(seat)) this.dialogTold.delete(seat);
     this.startRequest(project, await readLedger(this.deps.env, project.id));
     const state = fold(await readLedger(this.deps.env, project.id));
     await this.tidy(project, state);

@@ -29,8 +29,11 @@ export async function head(cwd, ref = "HEAD") {
 }
 /** Uncommitted changes (tracked or untracked), as porcelain paths. */
 export async function dirtyPaths(cwd) {
-    const out = await gitOk(cwd, ["status", "--porcelain", "--untracked-files=all"]);
-    return out ? out.split("\n").map((l) => l.slice(3).trim()).filter(Boolean) : [];
+    // Not trimmed as a whole: the first line's leading status column matters ("XY path").
+    const r = await git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+    if (r.code !== 0)
+        throw new SlpError(`git status failed in ${cwd}: ${(r.stderr || r.stdout).trim()}`);
+    return r.stdout.split(/\r?\n/).filter((l) => l.length > 3).map((l) => l.slice(3).trim());
 }
 export async function branchExists(cwd, branch) {
     return (await git(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;

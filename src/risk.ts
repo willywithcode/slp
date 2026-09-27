@@ -26,10 +26,27 @@ export async function laneReviewed(root: string, state: State, lane: Lane, upTo:
     if (r.lane !== lane.id || r.target !== lane.id || !r.done || r.done.summary.startsWith("not run") || !r.head) continue;
     if (r.head === upTo) return true;
     if ((await git(root, ["merge-base", "--is-ancestor", r.head, upTo])).code !== 0) continue;
-    const since = (await git(root, ["log", "--format=%s", `${r.head}..${upTo}`])).stdout.split("\n").filter(Boolean);
-    if (since.every((subject) => subject === `Merge ${lane.base} into ${lane.branch}`)) return true;
+    const since = (await git(root, ["rev-list", "--first-parent", `${r.head}..${upTo}`])).stdout.split("\n").filter(Boolean);
+    let covered = true;
+    for (const commit of since) if (!(await pureBaseMerge(root, lane.base, commit))) { covered = false; break; }
+    if (covered) return true;
   }
   return false;
+}
+
+/**
+ * A commit that only merges the base branch in: two parents, the second
+ * from the base branch, and exactly the tree a clean merge of them gives
+ * (so no change hides inside it, whatever its message says).
+ */
+async function pureBaseMerge(root: string, base: string, commit: string): Promise<boolean> {
+  const parents = (await git(root, ["rev-list", "--parents", "-n", "1", commit])).stdout.trim().split(/\s+/).slice(1);
+  if (parents.length !== 2) return false;
+  if ((await git(root, ["merge-base", "--is-ancestor", parents[1]!, base])).code !== 0) return false;
+  const merged = await git(root, ["merge-tree", "--write-tree", parents[0]!, parents[1]!]);
+  if (merged.code !== 0) return false;
+  const tree = (await git(root, ["rev-parse", `${commit}^{tree}`])).stdout.trim();
+  return merged.stdout.split("\n")[0]!.trim() === tree;
 }
 
 /** SQL that removes stored data: drops, truncates, and deletes without a WHERE. */
@@ -37,7 +54,7 @@ const DESTRUCTIVE_SQL = [
   /\bdrop\s+(table|column|database|schema|index)\b/i,
   /\btruncate\s+(table\s+)?\w+/i,
   /\balter\s+table\s+\S+\s+drop\b/i,
-  /\bdelete\s+from\s+[\w."`[\]]+\s*(;|$|["'`)])/i,
+  /\bdelete\s+from\s+[\w."`[\]]+\s*(;|$|["'`)]|returning\b|--|limit\b|order\s+by\b)/i,
 ];
 
 /**

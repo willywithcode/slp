@@ -102,6 +102,10 @@ async function land(deps, project, state, lane, req) {
         return fail(`the gate is red.\n\n${gateText(gate)}`, true);
     if ((await head(root, lane.branch)) !== tip)
         return fail(`the lane changed while it was being landed; land it again`, true);
+    // The gate tested the working copy; if it changed tracked files, it did not test the commit that would land.
+    const touched = await dirtyPaths(lane.workdir);
+    if (touched.length)
+        return fail(`the gate left changes in ${lane.workdir} (${touched.slice(0, 6).join(", ")}), so it did not test the lane's commit; a Peer must commit, ignore or remove them`, true);
     // Risk holds (catalogue 6, 16): code rules first; Jev may add a hold once calibrated.
     if (!req.overRisk) {
         const holds = [];
@@ -117,7 +121,8 @@ async function land(deps, project, state, lane, req) {
             holds.push(`Jev reads a data-loss risk (${reading.answers.data_loss_risk.confidence.toFixed(2)})`);
         if (holds.length) {
             await deps.herdr.notify(`slp: ${lane.id} held for you`, holds.join("; ")).catch(() => undefined);
-            return fail(`held for the Human: ${holds.join("; ")}. If the Human agrees to land it anyway: ` +
+            // The held commit is named, so an override applies to exactly this work.
+            return fail(`held for the Human [at ${tip}]: ${holds.join("; ")}. If the Human agrees to land it anyway: ` +
                 `\`slp close-lane ${lane.id} --land --over-risk --reason "the Human agreed: ..."\``, false);
         }
     }
@@ -155,4 +160,8 @@ async function land(deps, project, state, lane, req) {
     await sendLetter(deps, project.id, { letter: "LANDED", from: "slp", to: state.seats.get("sup")?.live ? "sup" : "human", lane: lane.id, text })
         .catch((error) => deps.out(`could not tell the Supervisor: ${String(error)}`));
     await deps.herdr.notify(`slp: ${lane.id} landed`, `${lane.title} (${commit.slice(0, 10)}); not pushed`).catch(() => undefined);
+    if (req.overRisk) {
+        // Overrides are the Human's; they hear of each one, with the words that authorised it (in the commit).
+        await deps.herdr.notify(`slp: ${lane.id} landed over a hold`, `On your word, as recorded in ${commit.slice(0, 10)}. Revert with git revert if that was not your intent.`).catch(() => undefined);
+    }
 }

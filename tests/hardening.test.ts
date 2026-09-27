@@ -230,7 +230,7 @@ describe("second review round", () => {
     await w.as("L1", ["accept", "L1-T2"]);
     await w.as("sup", ["close-lane", "L1", "--land"]);
     await watchOnce(w);
-    expect((await w.inbox("sup")).at(-1)).toMatch(/held for the Human: it is a high-risk lane/);
+    expect((await w.inbox("sup")).at(-1)).toMatch(/held for the Human \[at [0-9a-f]{40}\]: it is a high-risk lane/);
     // A fresh lane review of the current work lifts it.
     w.cli.idleAll();
     await w.as("L1", ["start-review", "--lane"]);
@@ -251,5 +251,61 @@ describe("second review round", () => {
     const before = w.cli.promptsTo(lead).length;
     await expect(w.as("sup", ["message", "L1", "hi"])).rejects.toThrow(/startup dialog/);
     expect(w.cli.promptsTo(lead).length).toBe(before);
+  });
+});
+
+describe("third review round", () => {
+  it("a gate that changes tracked files does not land", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    w.cli.idleAll();
+    const script = join(w.home, "touch.cjs");
+    await writeFile(script, `require("node:fs").writeFileSync(${JSON.stringify(join(w.repo, "README.md"))}, "changed by the gate");`);
+    await w.as("sup", ["set-project", "--gate", `node "${script}"`]);
+    await w.as("sup", ["close-lane", "L1", "--land"]);
+    await watchOnce(w);
+    expect((await w.inbox("sup")).at(-1)).toMatch(/the gate left changes in .*README\.md/);
+    expect((await w.state()).lanes.get("L1")!.open).toBe(true);
+  });
+
+  it("a commit posing as a base merge is not covered by an earlier review", async () => {
+    const w = await World.create();
+    const { laneReviewed } = await import("../src/risk.js");
+    sh(w.repo, "checkout", "-q", "-b", "lane/L1-x");
+    await commitFile(w.repo, "src/a.js", "a\n");
+    const reviewed = sh(w.repo, "rev-parse", "HEAD");
+    await commitFile(w.repo, "src/evil.js", "evil\n", "Merge main into lane/L1-x");
+    const lane = { id: "L1", base: "main", branch: "lane/L1-x" } as never;
+    const state = { reviews: new Map([["R1", { id: "R1", lane: "L1", target: "L1", focus: "", seat: "R1", head: reviewed, done: { summary: "ok" } }]]) } as never;
+    expect(await laneReviewed(w.repo, state, lane, sh(w.repo, "rev-parse", "HEAD"))).toBe(false);
+    // A real, clean merge of main is covered.
+    sh(w.repo, "reset", "-q", "--hard", reviewed);
+    sh(w.repo, "checkout", "-q", "main");
+    await commitFile(w.repo, "docs/b.md", "b\n");
+    sh(w.repo, "checkout", "-q", "lane/L1-x");
+    sh(w.repo, "merge", "-q", "--no-ff", "-m", "Merge main into lane/L1-x", "main");
+    expect(await laneReviewed(w.repo, state, lane, sh(w.repo, "rev-parse", "HEAD"))).toBe(true);
+  });
+
+  it("an override applies to the held commit only; DELETE ... RETURNING counts as destructive", async () => {
+    const w = await started();
+    await w.as("sup", ["open-lane", "--title", "Cleanup", "--outcome", "remove stale rows", "--accept", "a", "--write", "src/**"]);
+    w.cli.idleAll();
+    await w.as("L1", ["start-task", "--title", "t", "--goal", "g", "--accept", "a", "--own", "src/**"]);
+    await commitFile(w.repo, "src/clean.js", "db.run('DELETE FROM sessions RETURNING id');\n");
+    w.cli.idleAll();
+    await w.as("L1-T1", ["done", "complete", "--check", "ok", "done"]);
+    await w.as("L1", ["accept", "L1-T1"]);
+    await w.as("sup", ["close-lane", "L1", "--land"]);
+    await watchOnce(w);
+    expect((await w.inbox("sup")).at(-1)).toMatch(/destructive SQL: db\.run\('DELETE FROM sessions RETURNING id'\)/);
+    // New work after the hold: the override no longer applies.
+    w.cli.idleAll();
+    await w.as("L1", ["start-task", "--title", "t2", "--goal", "g", "--accept", "a", "--own", "src/**"]);
+    await commitFile(w.repo, "src/more.js", "x\n");
+    w.cli.idleAll();
+    await w.as("L1-T2", ["done", "complete", "--check", "ok", "done"]);
+    await w.as("L1", ["accept", "L1-T2"]);
+    await expect(w.as("sup", ["close-lane", "L1", "--land", "--over-risk", "--reason", "the Human agreed"])).rejects.toThrow(/changed since it was held/);
   });
 });

@@ -190,10 +190,14 @@ describe("the watch", () => {
 
   it("flags a complete hand-back with edits after the last test run", async () => {
     const w = await withPeer(true);
-    await rollout(w, [codex.exec("npm test"), codex.patch("*** Begin Patch\n*** Update File: src/a/a.js\n+x\n*** End Patch")]);
+    const path = await rollout(w, [codex.exec("npm test"), codex.patch("*** Begin Patch\n*** Update File: src/a/a.js\n+x\n*** End Patch")]);
     const watcher = new Watcher(w.deps(null), w.project);
     await watcher.tick();
     await w.as("L1-T1", ["done", "complete", "--check", "npm test: ok", "done"]);
+    // Not judged until the hand-back itself shows up in the transcript.
+    await watcher.tick();
+    expect((await w.state()).incidents.map((i) => i.fact)).not.toContain("unverified");
+    await appendFile(path, jsonl([codex.exec("slp.cmd done complete --check ok -")]));
     await watcher.tick();
     const facts = (await w.state()).incidents.map((i) => i.fact);
     expect(facts).toContain("unverified");

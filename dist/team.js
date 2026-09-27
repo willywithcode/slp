@@ -4,7 +4,7 @@ import { append, nextId, readLedger } from "./core/ledger.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { contextPath, ensureProject, saveProject } from "./core/project.js";
 import { detectGate } from "./gate.js";
-import { commonDir, toplevel } from "./git.js";
+import { commonDir, head, toplevel } from "./git.js";
 import { intro } from "./guide.js";
 import { pendingRequests } from "./land.js";
 import { dropLane } from "./lanes.js";
@@ -144,6 +144,11 @@ export async function closeLane(a, laneId, how) {
             events.some((r) => r.kind === "request" && r.request === e.request && r.lane === laneId));
         if (!held)
             throw new SlpError(`${laneId} has not been held. Land it without --over-risk; slp says if it holds it for the Human.`);
+        // The override covers the work that was held, not work added since.
+        const heldAt = /\[at ([0-9a-f]{40})\]/.exec(held.detail)?.[1];
+        if (!heldAt || heldAt !== await head(a.project.root, lane.branch)) {
+            throw new SlpError(`${laneId} changed since it was held; land it without --over-risk so slp checks the new work, and show the Human any new hold.`);
+        }
         const sup = a.state.seats.get("sup");
         const words = sup?.sessionId ? await humanWordsSince(a.deps.env, sup.sessionId, held.ts).catch(() => []) : [];
         if (!words.length) {
