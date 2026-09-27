@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Role } from "./core/ledger.js";
 import { slpHome, type Env } from "./core/paths.js";
 import { writeAtomic } from "./core/fsutil.js";
+import { skillDeny } from "./skills.js";
 
 // Seat permissions (ADR 0016), after seatworks: seats run without asking
 // where a sandbox holds them, each role is denied what it must never do, and
@@ -54,7 +55,7 @@ export interface SeatSettings { permissions: { defaultMode?: string; allow: stri
  * the sandbox, like seatworks; otherwise they ask for anything not allowed.
  */
 export function claudeSettings(role: Role, sandboxed: boolean, home: string): SeatSettings {
-  const deny = [...SEAT_DENY, ...bashDeny(gitDenied(role))];
+  const deny = [...SEAT_DENY, ...bashDeny(gitDenied(role)), ...skillDeny()];
   if (role !== "peer") deny.push(...WRITE_TOOLS, "Bash(sleep *)");
   const allow = ["Bash(slp *)", "Bash(slp.cmd *)", ...(role === "peer" ? [] : READ_AND_TEST)];
   if (!sandboxed) return { permissions: { allow, deny } };

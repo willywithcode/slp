@@ -6,11 +6,12 @@ import { GoneError, SlpError } from "./core/errors.js";
 import { append, readLedger, Role } from "./core/ledger.js";
 import { acquireLock, releaseLock } from "./core/lock.js";
 import { configPath, type Env } from "./core/paths.js";
-import { contextPath, loadProject } from "./core/project.js";
+import { contextPath, loadProject, rootFor } from "./core/project.js";
 import { guide } from "./guide.js";
 import { Herdr } from "./herdr.js";
 import { calibrate } from "./jev/calibrate.js";
-import { projectHere, whoAmI } from "./identity.js";
+import { projectHere, whoAmI, type Me } from "./identity.js";
+import { repoSkills, skillsSection } from "./skills.js";
 import { amendLane, openLane } from "./lanes.js";
 import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
@@ -46,7 +47,7 @@ const OPTIONS = {
   parallel: { type: "boolean" }, task: { type: "string" }, lane: { type: "boolean" }, focus: { type: "string" },
   check: { type: "string", multiple: true }, left: { type: "string" }, finding: { type: "string", multiple: true },
   default: { type: "string" }, force: { type: "boolean" }, project: { type: "string" }, once: { type: "boolean" },
-  interval: { type: "string" }, file: { type: "string" }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
+  interval: { type: "string" }, file: { type: "string" }, skill: { type: "string", multiple: true }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
 } as const;
 
 export class UsageError extends Error {}
@@ -72,7 +73,7 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
   if (!command || values.help || command === "help") {
     // A seat asking for help gets its own guide, not the Human's usage.
     const me = await whoAmI(deps.env).catch(() => null);
-    deps.out(me ? guide(me.seat.role) : USAGE);
+    deps.out(me ? await guideFor(me) : USAGE);
     return command || values.help ? 0 : 2;
   }
   const text: TextArg = async (arg) => {
@@ -107,11 +108,11 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
       if (args[0] !== undefined) {
         const role = Role.safeParse(args[0]);
         if (!role.success) throw new UsageError(`Role must be one of ${Role.options.join(", ")}`);
-        deps.out(guide(role.data));
+        deps.out(withSkills(guide(role.data), role.data, await repoSkills(await rootFor(cwd))));
         return 0;
       }
       const me = await whoAmI(deps.env).catch(() => null);
-      deps.out(me ? guide(me.seat.role) : USAGE);
+      deps.out(me ? await guideFor(me) : USAGE);
       return 0;
     }
     case "status": {
@@ -255,7 +256,7 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
       arity(0);
       await startTask(a, await loadConfig(deps.env), {
         title: v.title ?? "", goal: v.goal ?? "", acceptance: list(v.accept), owned: list(v.own), outOfScope: list(v.out),
-        context: v.context ?? "", preset: v.preset ?? null, parallel: v.parallel === true,
+        context: v.context ?? "", preset: v.preset ?? null, parallel: v.parallel === true, skills: list(v.skill),
       });
       return 0;
     case "start-review":
@@ -310,6 +311,18 @@ async function humanIncidents(deps: Deps, cwd: string, command: string, args: st
   if (!state.incidents.some((i) => i.incident === args[0])) throw new SlpError(`No incident ${args[0]}`);
   await append(deps.env, project.id, () => ({ kind: "ack" as const, incident: args[0]!, by: "human", verdict, note: args[2] ?? "" }));
   return 0;
+}
+
+function withSkills(text: string, role: Parameters<typeof guide>[0], present: ReadonlySet<string>): string {
+  const section = skillsSection(role, present);
+  return section ? `${text}\n\n${section}` : text;
+}
+
+/** A seat's guide, with the skills its working copy has. */
+async function guideFor(me: Me): Promise<string> {
+  const task = me.seat.task ? me.state.tasks.get(me.seat.task) : undefined;
+  const lane = me.seat.lane ? me.state.lanes.get(me.seat.lane) : undefined;
+  return withSkills(guide(me.seat.role), me.seat.role, await repoSkills(task?.workdir ?? lane?.workdir ?? me.project.root));
 }
 
 async function watch(deps: Deps, id: string, interval: number, once: boolean): Promise<number> {

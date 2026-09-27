@@ -9,6 +9,7 @@ import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto,
 import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
 import { changedLines } from "./risk.js";
+import { AVOIDED, repoSkills } from "./skills.js";
 import { intro } from "./guide.js";
 import { describe, sendLetter } from "./letters.js";
 import { closeSeat, openSeat } from "./seats.js";
@@ -52,14 +53,20 @@ export interface TaskInput {
   context: string;
   preset: string | null;
   parallel: boolean;
+  /** Repository skills the Peer should use (`--skill`). */
+  skills?: string[];
 }
 
-function brief(t: Pick<Task, "id" | "title" | "goal" | "acceptance" | "owned" | "outOfScope" | "context" | "branch" | "workdir">, lane: Lane): string {
+type Brief = Pick<Task, "id" | "title" | "goal" | "acceptance" | "owned" | "outOfScope" | "context" | "branch" | "workdir"> & { skills: string[] };
+
+function brief(t: Brief, lane: Lane): string {
+  const skills = t.skills.map((s) => `\`${s}\``).join(", ");
   return [
     `Task ${t.id}: ${t.title}`, "", `Goal: ${t.goal}`, "", "Acceptance:", ...t.acceptance.map((x) => `- ${x}`), "",
     `You own (change only these): ${t.owned.join(", ")}`,
     ...(t.outOfScope.length ? ["Out of scope:", ...t.outOfScope.map((x) => `- ${x}`)] : []),
     ...(t.context.trim() ? ["", "Context:", t.context] : []),
+    ...(t.skills.length ? ["", `Use the repository's skill${t.skills.length > 1 ? "s" : ""}: ${skills}.`] : []),
     "", `Working copy: ${t.workdir}`, `Branch: ${t.branch} (commit here; never push, switch branches or merge)`,
     "", `Lane ${lane.id} outcome, for context: ${lane.outcome}`, "The Human's concept: `slp context`",
   ].join("\n");
@@ -75,6 +82,14 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
   if (outside.length) {
     throw new SlpError(`Owned paths outside lane ${lane.id}'s write set (${lane.writeSet.join(", ")}): ${outside.join(", ")}. ` +
       "Ask the Supervisor to amend the lane if the task really needs them.");
+  }
+  const skills = input.skills ?? [];
+  if (skills.length) {
+    const present = await repoSkills(lane.workdir);
+    const missing = skills.filter((s) => !present.has(s));
+    if (missing.length) throw new SlpError(`The lane's copy has no skill ${missing.join(", ")} (it has: ${[...present].sort().join(", ") || "none"}).`);
+    const avoided = skills.filter((s) => AVOIDED.some((x) => x.skill === s));
+    if (avoided.length) throw new SlpError(`${avoided.join(", ")} is not used in the team; see \`slp guide\`.`);
   }
   const laneHead = await head(lane.workdir);
   const slots = join(projectDir(deps.env, project.id), "slots");
@@ -102,7 +117,7 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
   });
   const { task: id, branch, workdir } = started;
   const draft = { id, title: input.title, goal: input.goal, acceptance: input.acceptance, owned: input.owned,
-    outOfScope: input.outOfScope, context: input.context, branch, workdir };
+    outOfScope: input.outOfScope, context: input.context, branch, workdir, skills };
   try {
     if (input.parallel) await addWorktree(project.root, workdir, branch, laneHead);
     const opened = await openSeat(deps, project, config, {
