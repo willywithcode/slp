@@ -23,6 +23,7 @@ Use `docs/templates/decision.md`. Task-local choices stay in the active plan.
 - [0014](0014-dialogs-and-prompts-are-the-humans.md) Dialogs and prompts are the Human's
 - [0015](0015-landing-holds.md) Landing holds for risk
 - [0016](0016-seat-permissions.md) Seat permissions after seatworks
+- [0017](0017-repository-skills-in-a-team.md) Repository skills in a team
 
 ## Add A Decision When
 

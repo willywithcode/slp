@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { slpHome } from "./core/paths.js";
 import { writeAtomic } from "./core/fsutil.js";
+import { skillDeny } from "./skills.js";
 // Seat permissions (ADR 0016), after seatworks: seats run without asking
 // where a sandbox holds them, each role is denied what it must never do, and
 // a git shim on every seat's PATH refuses the git commands a role must not
@@ -45,7 +46,7 @@ const READ_AND_TEST = [
  * the sandbox, like seatworks; otherwise they ask for anything not allowed.
  */
 export function claudeSettings(role, sandboxed, home) {
-    const deny = [...SEAT_DENY, ...bashDeny(gitDenied(role))];
+    const deny = [...SEAT_DENY, ...bashDeny(gitDenied(role)), ...skillDeny()];
     if (role !== "peer")
         deny.push(...WRITE_TOOLS, "Bash(sleep *)");
     const allow = ["Bash(slp *)", "Bash(slp.cmd *)", ...(role === "peer" ? [] : READ_AND_TEST)];

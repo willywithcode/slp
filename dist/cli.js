@@ -5,11 +5,12 @@ import { GoneError, SlpError } from "./core/errors.js";
 import { append, readLedger, Role } from "./core/ledger.js";
 import { acquireLock, releaseLock } from "./core/lock.js";
 import { configPath } from "./core/paths.js";
-import { contextPath, loadProject } from "./core/project.js";
+import { contextPath, loadProject, rootFor } from "./core/project.js";
 import { guide } from "./guide.js";
 import { Herdr } from "./herdr.js";
 import { calibrate } from "./jev/calibrate.js";
 import { projectHere, whoAmI } from "./identity.js";
+import { repoSkills, skillsSection } from "./skills.js";
 import { amendLane, openLane } from "./lanes.js";
 import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
@@ -43,7 +44,7 @@ const OPTIONS = {
     parallel: { type: "boolean" }, task: { type: "string" }, lane: { type: "boolean" }, focus: { type: "string" },
     check: { type: "string", multiple: true }, left: { type: "string" }, finding: { type: "string", multiple: true },
     default: { type: "string" }, force: { type: "boolean" }, project: { type: "string" }, once: { type: "boolean" },
-    interval: { type: "string" }, file: { type: "string" }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
+    interval: { type: "string" }, file: { type: "string" }, skill: { type: "string", multiple: true }, help: { type: "boolean", short: "h" }, "dry-run": { type: "boolean" },
 };
 export class UsageError extends Error {
 }
@@ -62,7 +63,7 @@ export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
     if (!command || values.help || command === "help") {
         // A seat asking for help gets its own guide, not the Human's usage.
         const me = await whoAmI(deps.env).catch(() => null);
-        deps.out(me ? guide(me.seat.role) : USAGE);
+        deps.out(me ? await guideFor(me) : USAGE);
         return command || values.help ? 0 : 2;
     }
     const text = async (arg) => {
@@ -103,11 +104,11 @@ export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
                 const role = Role.safeParse(args[0]);
                 if (!role.success)
                     throw new UsageError(`Role must be one of ${Role.options.join(", ")}`);
-                deps.out(guide(role.data));
+                deps.out(withSkills(guide(role.data), role.data, await repoSkills(await rootFor(cwd))));
                 return 0;
             }
             const me = await whoAmI(deps.env).catch(() => null);
-            deps.out(me ? guide(me.seat.role) : USAGE);
+            deps.out(me ? await guideFor(me) : USAGE);
             return 0;
         }
         case "status": {
@@ -282,7 +283,7 @@ async function seatVerb(command, args, v, a, text, arity) {
             arity(0);
             await startTask(a, await loadConfig(deps.env), {
                 title: v.title ?? "", goal: v.goal ?? "", acceptance: list(v.accept), owned: list(v.own), outOfScope: list(v.out),
-                context: v.context ?? "", preset: v.preset ?? null, parallel: v.parallel === true,
+                context: v.context ?? "", preset: v.preset ?? null, parallel: v.parallel === true, skills: list(v.skill),
             });
             return 0;
         case "start-review":
@@ -355,6 +356,16 @@ async function humanIncidents(deps, cwd, command, args, arity) {
         throw new SlpError(`No incident ${args[0]}`);
     await append(deps.env, project.id, () => ({ kind: "ack", incident: args[0], by: "human", verdict, note: args[2] ?? "" }));
     return 0;
+}
+function withSkills(text, role, present) {
+    const section = skillsSection(role, present);
+    return section ? `${text}\n\n${section}` : text;
+}
+/** A seat's guide, with the skills its working copy has. */
+async function guideFor(me) {
+    const task = me.seat.task ? me.state.tasks.get(me.seat.task) : undefined;
+    const lane = me.seat.lane ? me.state.lanes.get(me.seat.lane) : undefined;
+    return withSkills(guide(me.seat.role), me.seat.role, await repoSkills(task?.workdir ?? lane?.workdir ?? me.project.root));
 }
 async function watch(deps, id, interval, once) {
     // One watcher per project: two would deliver letters and land lanes twice.

@@ -47,7 +47,9 @@ The Human's settled answers live in the project's concept, outside the
 repository: read it with \`slp context\`, rewrite it whole with
 \`slp context - <<'EOF' ... EOF\`. Keep it short and current: what the
 project is, its terms, how it behaves, what it does not do. Ask the Human
-only what it does not already answer, with your recommendation.
+only what it does not already answer, with your recommendation. A
+repository's own CONTEXT.md, glossary or ADRs are files in the repository:
+changing them is a lane's work (a Peer writes, a Lead judges), never yours.
 
 ## Opening work
 
@@ -113,8 +115,12 @@ work did (not what it says), keep the lane one straight line.
 
 \`slp start-task --title "..." --goal "..." --accept "..." --own "src/a/**"
  [--out "..."] [--context "settled facts, ruled-out approaches and why"]
- [--preset sol|luna|flash] [--parallel]\`
+ [--preset sol|luna|flash] [--skill tdd] [--parallel]\`
 
+- \`--skill\` names a repository skill the Peer should use (repeatable; the
+  list is under "The repository's skills" below).
+- A lane that spans sessions and needs a durable plan (the repository's
+  \`docs/plans/active/\`): brief a Peer to write and keep it; you judge it.
 - One writer per working copy: lane-mode tasks run one after another;
   \`--parallel\` gives a task its own copy when its owned paths touch no other
   running task.

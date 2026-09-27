@@ -6,7 +6,7 @@ import { append, nextId, readLedger, type EventOf } from "./core/ledger.js";
 import { lockHeldByLiveProcess } from "./core/lock.js";
 import { contextPath, ensureProject, saveProject, type Project } from "./core/project.js";
 import { detectGate } from "./gate.js";
-import { commonDir, head, toplevel } from "./git.js";
+import { commonDir, git, head, toplevel } from "./git.js";
 import { intro } from "./guide.js";
 import { pendingRequests } from "./land.js";
 import { dropLane } from "./lanes.js";
@@ -33,6 +33,15 @@ The Supervisor keeps it short and current; nobody else edits it.
 
 ## What it does not do
 `;
+
+/**
+ * Skill files (and the agent guidance) the repository has not committed: a
+ * lane in its own worktree only sees committed files.
+ */
+export async function uncommittedSkills(root: string): Promise<string[]> {
+  const r = await git(root, ["status", "--porcelain", "--untracked-files=all", "--", ".claude/skills", ".agents/skills", "AGENTS.md", "CLAUDE.md"]);
+  return r.code === 0 ? r.stdout.split(/\r?\n/).filter((l) => l.length > 3).map((l) => l.slice(3).trim()) : [];
+}
 
 /** How long `slp start` waits for its watcher to take the watch lock; mutable for tests. */
 export const watchStartMs = { value: 15_000 };
@@ -89,6 +98,11 @@ export async function start(deps: Deps, cwd: string, config: Config): Promise<Pr
   state = fold(await readLedger(deps.env, project.id));
   deps.out(`slp team for ${project.root} (${project.id}): talk to the Supervisor in pane ${opened.seat.paneId}.`);
   deps.out(`concept: ${contextPath(deps.env, project.id)}`);
+  const loose = await uncommittedSkills(project.root);
+  if (loose.length) {
+    deps.out(`note: ${loose.length} skill or guidance file(s) are not committed (${loose.slice(0, 3).join(", ")}${loose.length > 3 ? ", ..." : ""}); ` +
+      "lanes in their own worktree will not see them. Commit them to share them with every lane.");
+  }
   return project;
 }
 

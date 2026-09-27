@@ -36,7 +36,7 @@ by live Herdr runs on Windows with Claude Code and Codex seats.
 The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.1.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.2.tar.gz
 slp help
 ```
 
@@ -115,6 +115,15 @@ Claude Code settings per role and a `git` shim on every seat's PATH. Codex
 seats never ask inside their sandbox. Claude seats run without asking inside
 Claude Code's sandbox on macOS and Linux; on Windows, where it does not exist
 yet, they ask, with read-only git and test commands allowed.
+
+## Repository skills
+
+In a repository with skills (mustang's, in `.claude/skills` or
+`.agents/skills`), each seat's `slp guide` lists the ones its role reaches for
+and the ones no seat uses (e.g. `herdr`, `handoff`, `implement`); Claude seats
+are denied those outright. A Lead names skills in a brief with
+`slp start-task --skill tdd`. Commit the skill files: lanes in their own
+worktree only see committed files (ADR 0017).
 
 ## Jev (optional)
 
