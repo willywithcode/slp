@@ -5,7 +5,8 @@ import { loadProject, type Project } from "./core/project.js";
 import { loadConfig, type Config } from "./core/config.js";
 import { pendingPrompt } from "./permit.js";
 import { pendingRequests, runRequest } from "./land.js";
-import { teardownLane } from "./lanes.js";
+import { openQueued, queuedReady, teardownLane } from "./lanes.js";
+import { sweepKept } from "./slots.js";
 import { describe, pump, sendLetter } from "./letters.js";
 import { closeSeat } from "./seats.js";
 import { fold, liveSeats, superiorOf, type Seat, type State } from "./state.js";
@@ -26,6 +27,8 @@ export const watchTiming = {
   goneTicks: 3,
   /** A permission prompt the Supervisor answers is passed on after this long (it may clear by itself). */
   permitAfterMs: 20_000,
+  /** Kept working copies are tried again this often. */
+  sweepMs: 10 * 60_000,
 };
 
 export class Watcher {
@@ -39,6 +42,7 @@ export class Watcher {
   private readonly desk: JevDesk;
   /** The last ledger event handed to the decision points. */
   private seen = 0;
+  private lastSweep = 0;
 
   constructor(private readonly deps: Deps, private readonly projectId: string) {
     this.desk = new JevDesk(deps);
@@ -70,6 +74,11 @@ export class Watcher {
     this.startRequest(project, await readLedger(this.deps.env, project.id));
     const state = fold(await readLedger(this.deps.env, project.id));
     await this.tidy(project, state);
+    this.openNext(project, state);
+    if (state.keptSlots.size && this.now() - this.lastSweep >= watchTiming.sweepMs && !this.inflight) {
+      this.lastSweep = this.now();
+      await sweepKept(this.deps, project, state).catch((error: unknown) => this.deps.out(`sweep: ${describe(error)}`));
+    }
     const agents = await this.deps.herdr.agentList().catch(() => null);
     if (agents) {
       const status = new Map(agents.map((a) => [a.paneId, a.status]));
@@ -99,6 +108,17 @@ export class Watcher {
       const problems = await teardownLane(this.deps, project, lane, state);
       this.deps.out(`closed the seats of ${lane.id}, which was already closed${problems.length ? `; ${problems.join("; ")}` : ""}`);
     }
+  }
+
+  /** Open a queued lane once the lane it waits for has closed, as a landing does: one thing at a time. */
+  private openNext(project: Project, state: State): void {
+    if (this.inflight) return;
+    const next = queuedReady(state);
+    if (!next) return;
+    this.deps.out(`opening ${next.lane}: ${next.after} has closed`);
+    this.inflight = openQueued(this.deps, project, next)
+      .catch((error: unknown) => this.deps.out(`${next.lane} could not open: ${describe(error)}`))
+      .finally(() => { this.inflight = null; });
   }
 
   /** Wait for a gate or landing in progress (tests, shutdown). */

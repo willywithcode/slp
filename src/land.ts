@@ -3,7 +3,7 @@ import { append, readLedger, type EventOf, type SlpEvent } from "./core/ledger.j
 import type { Project } from "./core/project.js";
 import { detectGate, runGate, type GateResult } from "./gate.js";
 import { dirtyPaths, git, head, mergeInto, squashCommit, treeOf, worktrees } from "./git.js";
-import { teardownLane } from "./lanes.js";
+import { laneChanges, teardownLane } from "./lanes.js";
 import { loadConfig } from "./core/config.js";
 import { consult } from "./jev/points.js";
 import { LANDING } from "./jev/questions.js";
@@ -58,7 +58,7 @@ export async function runRequest(deps: Deps, project: Project, req: EventOf<"req
   if (lane && !lane.open && lane.landed && req.what === "land") {
     // Landed before a crash cut the rest short: finish tidying up.
     const problems = await teardownLane(deps, project, lane, state);
-    await git(project.root, ["branch", "-D", lane.branch]);
+    if (lane.home !== "onBranch") await git(project.root, ["branch", "-D", lane.branch]);
     await finish(deps, project, req.request, true, `landed as ${lane.commit?.slice(0, 10)}${problems.length ? `; ${problems.join("; ")}` : ""}`);
     return;
   }
@@ -85,10 +85,13 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
   };
   const busy = [...state.tasks.values()].filter((t) => t.lane === lane.id && ["running", "handed-back", "rework"].includes(t.state));
   if (busy.length) return fail(`tasks still open (${busy.map((t) => `${t.id} ${t.state}`).join(", ")})`, true);
-  const dirty = await dirtyPaths(lane.workdir);
+  const dirty = await laneChanges(lane);
   if (dirty.length) return fail(`uncommitted changes in ${lane.workdir}: ${dirty.slice(0, 10).join(", ")}`, true);
   const root = project.root;
-  const baseCheckout = (await worktrees(root)).find((w) => w.branch === lane.base);
+  // On the Human's own branch (ADR 0018) the lane's commits are already
+  // where they belong: slp checks and records, and moves nothing.
+  const onBranch = lane.home === "onBranch";
+  const baseCheckout = onBranch ? undefined : (await worktrees(root)).find((w) => w.branch === lane.base);
   if (baseCheckout && (await dirtyPaths(baseCheckout.path)).length) {
     return fail(`${lane.base} is checked out at ${baseCheckout.path} with uncommitted changes; the Human must commit or stash them`, false);
   }
@@ -96,12 +99,12 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
   // Pin the base now: the lane is brought up to date with exactly this commit,
   // the gate tests the result, and the squash goes on top of it. If the base
   // moves meanwhile, the update below refuses rather than undo those commits.
-  const baseHead = await head(root, lane.base);
+  const baseHead = onBranch ? lane.baseCommit : await head(root, lane.base);
   const lanePre = await head(root, lane.branch);
   // An override covers exactly the commit the Human agreed to; anything added since is checked again.
   if (req.overRisk && req.heldAt !== lanePre) return fail(`${lane.id} changed after the Human agreed to land it over the hold; land it again without --over-risk`, false);
   const upToDate = (await git(root, ["merge-base", "--is-ancestor", baseHead, lanePre])).code === 0;
-  if (!upToDate) {
+  if (!upToDate && !onBranch) {
     const merged = await mergeInto(lane.workdir, baseHead, `Merge ${lane.base} into ${lane.branch}`);
     if (!merged.ok) return fail(`${lane.base} conflicts with the lane in ${merged.conflicts.join(", ")}; a Peer must reconcile them`, true);
   }
@@ -111,7 +114,7 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
   if (gate && !gate.result.ok && !req.overGate) return fail(`the gate is red.\n\n${gateText(gate)}`, true);
   if ((await head(root, lane.branch)) !== tip) return fail(`the lane changed while it was being landed; land it again`, true);
   // The gate tested the working copy; if it changed tracked files, it did not test the commit that would land.
-  const touched = await dirtyPaths(lane.workdir);
+  const touched = await laneChanges(lane);
   if (touched.length) return fail(`the gate left changes in ${lane.workdir} (${touched.slice(0, 6).join(", ")}), so it did not test the lane's commit; a Peer must commit, ignore or remove them`, true);
 
   // Risk holds (catalogue 6, 16): code rules first; Jev may add a hold once calibrated.
@@ -135,8 +138,8 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
     }
   }
 
-  let commit = baseHead;
-  if ((await treeOf(root, tip)) !== (await treeOf(root, baseHead))) {
+  let commit = onBranch ? tip : baseHead;
+  if (!onBranch && (await treeOf(root, tip)) !== (await treeOf(root, baseHead))) {
     const message = `${lane.title}\n\n${lane.outcome}\n\nLanded by slp from lane ${lane.id} (${lane.branch}).` +
       (req.overGate ? `\nLanded over a red gate: ${req.note}` : "") +
       (req.overRisk ? `\nLanded over a risk hold: ${req.note}` : "");
@@ -156,10 +159,12 @@ async function land(deps: Deps, project: Project, state: State, lane: Lane, req:
     kind: "lane-close" as const, lane: lane.id, landed: true, reason: req.note, commit, overGate: req.overGate,
   }));
   const problems = await teardownLane(deps, project, lane, state);
-  const deleted = await git(root, ["branch", "-D", lane.branch]);
+  const deleted = onBranch ? { code: 0, stderr: "" } : await git(root, ["branch", "-D", lane.branch]);
   if (deleted.code !== 0 && !problems.length) problems.push(`branch ${lane.branch} was kept: ${deleted.stderr.trim()}`);
   await finish(deps, project, req.request, true, `landed as ${commit.slice(0, 10)}${problems.length ? `; ${problems.join("; ")}` : ""}`);
-  const text = `${lane.id} landed on ${lane.base} as ${commit.slice(0, 10)}: ${lane.title}\n\n${gateText(gate)}` +
+  const text = (onBranch
+    ? `${lane.id} is done on your branch ${lane.branch} (${baseHead.slice(0, 10)}..${commit.slice(0, 10)}), which slp did not move: ${lane.title}\n\n${gateText(gate)}`
+    : `${lane.id} landed on ${lane.base} as ${commit.slice(0, 10)}: ${lane.title}\n\n${gateText(gate)}`) +
     (commit === baseHead ? "\n\n(The lane changed nothing; no commit was made.)" : "") +
     (problems.length ? `\n\nThe Human must know:\n${problems.map((p) => `- ${p}`).join("\n")}` : "");
   if (problems.length) await deps.herdr.notify(`slp: ${lane.id} landed, with loose ends`, problems.join("\n")).catch(() => undefined);

@@ -140,8 +140,9 @@ export async function resendIntro(deps: Deps, project: Project, state: State, na
 }
 
 export async function closeLane(a: Actor, laneId: string, how: { land: boolean; drop: boolean; overGate: boolean; overRisk?: boolean; reason: string }): Promise<void> {
+  if (a.state.queued.has(laneId) && how.drop) return dropLane(a.deps, a.project, laneId, how.reason);
   const lane = a.state.lanes.get(laneId);
-  if (!lane || !lane.open) throw new SlpError(`No open lane ${laneId}`);
+  if (!lane || !lane.open) throw new SlpError(a.state.queued.has(laneId) ? `Lane ${laneId} is queued; it can only be dropped until it opens.` : `No open lane ${laneId}`);
   if (how.land === how.drop) throw new SlpError("Say how: --land, or --drop --reason \"...\"");
   if (how.drop) return dropLane(a.deps, a.project, laneId, how.reason);
   if ((how.overGate || how.overRisk) && !how.reason.trim()) throw new SlpError("Landing over a red gate or a risk hold needs --reason \"...\" (the Human's words).");
@@ -201,12 +202,20 @@ export function render(project: Project, state: State, now: number, contextFile:
   const lanes = [...state.lanes.values()].filter((l) => l.open);
   lines.push("", `Open lanes (${lanes.length}):`);
   for (const l of lanes) {
-    lines.push(`  ${l.id} ${l.title} · ${l.branch}${l.inCheckout ? " (your checkout)" : ` @ ${l.workdir}`}`);
+    lines.push(`  ${l.id} ${l.title} · ${l.branch}${l.home === "onBranch" ? " (your branch, your checkout)" : l.inCheckout ? " (your checkout)" : ` @ ${l.workdir}`}`);
     for (const t of [...state.tasks.values()].filter((x) => x.lane === l.id)) {
       lines.push(`    ${t.id} ${t.state}${t.reworks ? ` (rework ${t.reworks})` : ""}${t.mode === "parallel" ? " parallel" : ""}: ${t.title}`);
     }
     const gate = state.gates.filter((g) => g.lane === l.id).at(-1);
     if (gate) lines.push(`    gate ${gate.ok ? "green" : "RED"} ${ago(gate.ts)} ago`);
+  }
+  if (state.queued.size) {
+    lines.push("", "Queued lanes:");
+    for (const q of state.queued.values()) lines.push(`  ${q.lane} ${q.input.title} · opens in your checkout after ${q.after}`);
+  }
+  if (state.keptSlots.size) {
+    lines.push("", "Kept working copies (remove with `slp clean` once safe; `slp clean --force` discards their changes):");
+    for (const k of state.keptSlots.values()) lines.push(`  ${k.path} (${k.owner}, ${ago(k.since)} ago): ${k.why}`);
   }
   const asks = [...state.asks.values()].filter((a) => a.answer === null);
   if (asks.length) {

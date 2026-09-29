@@ -11,7 +11,7 @@ import { commitFile, sh, World } from "./helpers.js";
 // Regressions for findings of the independent reviews of v0.3.
 
 const LANE = ["open-lane", "--title", "Greeting", "--outcome", "greets", "--accept", "a", "--write", "src/**"];
-const DOCS = ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a", "--write", "docs/**"];
+const DOCS = ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a", "--write", "docs/**", "--home", "isolate"];
 
 async function started(): Promise<World> {
   const w = await World.create();
@@ -81,17 +81,29 @@ describe("work is never discarded", () => {
     expect(existsSync(join(l2.workdir, "draft.md"))).toBe(true);
   });
 
-  it("cutting a parallel task keeps a worktree that has uncommitted changes", async () => {
+  it("cutting a parallel task keeps a copy only while tracked files hold uncommitted work", async () => {
     const w = await started();
     await w.as("sup", LANE);
     w.cli.idleAll();
     await w.as("L1", ["start-task", "--title", "b", "--goal", "g", "--accept", "x", "--own", "src/b/**", "--parallel"]);
     const t = (await w.state()).tasks.get("L1-T1")!;
-    await writeFile(join(t.workdir, "wip.txt"), "wip\n");
+    await writeFile(join(t.workdir, "README.md"), "changed but not committed\n");
+    await writeFile(join(t.workdir, "cache.utmp"), "tool output\n");
     w.cli.idleAll();
     await w.as("L1", ["cut", "L1-T1", "wrong idea"]);
-    expect(existsSync(join(t.workdir, "wip.txt"))).toBe(true);
-    expect(w.out.at(-1)).toMatch(/worktree, which has uncommitted changes/);
+    expect(existsSync(join(t.workdir, "README.md"))).toBe(true);
+    expect(w.out.at(-1)).toMatch(/working copy \(uncommitted changes to 1 tracked file\(s\): README\.md\)/);
+    const kept = (await w.state()).keptSlots.get(t.workdir)!;
+    expect(kept).toMatchObject({ owner: "L1-T1" });
+    expect(w.cli.notifications.some((n) => n.title.includes("kept L1-T1's working copy"))).toBe(true);
+
+    // Only untracked files (tool caches): removed, folder and all.
+    await w.as("L1", ["start-task", "--title", "c", "--goal", "g", "--accept", "x", "--own", "src/c/**", "--parallel"]);
+    const t2 = (await w.state()).tasks.get("L1-T2")!;
+    await writeFile(join(t2.workdir, "Library.cache"), "x\n");
+    w.cli.idleAll();
+    await w.as("L1", ["cut", "L1-T2", "not needed"]);
+    expect(existsSync(t2.workdir)).toBe(false);
   });
 });
 

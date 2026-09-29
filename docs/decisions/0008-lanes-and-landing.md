@@ -10,8 +10,8 @@ Accepted
 
 - A lane has an outcome, acceptance, out of scope and a write set; open
   lanes may not overlap in what they write.
-- Branch `lane/<id>-<slug>`. The first lane uses the checkout (clean
-  required); later lanes use git worktrees under `~/.slp`.
+- Branch `lane/<id>-<slug>`. Where a lane works is ADR 0018 (it replaces
+  "the first lane uses the checkout; later lanes use worktrees").
 - One writer per working copy. Peers commit on their lane (or task) branch;
   Leads and the Supervisor never touch git.
 - The gate is the project's test command (detected, overridable). It runs

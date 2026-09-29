@@ -13,7 +13,8 @@ import { Herdr } from "./herdr.js";
 import { calibrate } from "./jev/calibrate.js";
 import { projectHere, whoAmI, type Me } from "./identity.js";
 import { repoSkills, skillsSection } from "./skills.js";
-import { amendLane, openLane } from "./lanes.js";
+import { amendLane, openLane, type Home } from "./lanes.js";
+import { cleanSlots } from "./slots.js";
 import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
 import { permit } from "./permit.js";
@@ -30,6 +31,7 @@ The Human (in a Herdr pane, inside the repository):
   slp start                 open the Supervisor beside you and a watcher below
   slp status                where the work stands
   slp stop [--force]        close every seat
+  slp clean [--force]       remove working copies slp kept (--force: even with uncommitted changes)
   slp intro <seat>          resend a seat's introduction (after a trust dialog)
   slp redeliver <seq> [--force]
   slp watch [--project ID] [--once] [--interval SECONDS]
@@ -43,7 +45,7 @@ Seats run \`slp guide\` for their own verbs. State lives in ~/.slp (SLP_HOME).`;
 const OPTIONS = {
   title: { type: "string" }, outcome: { type: "string" }, accept: { type: "string", multiple: true },
   out: { type: "string", multiple: true }, write: { type: "string", multiple: true }, human: { type: "string" },
-  isolate: { type: "boolean" }, why: { type: "string" }, land: { type: "boolean" }, drop: { type: "boolean" },
+  isolate: { type: "boolean" }, home: { type: "string" }, carry: { type: "boolean" }, after: { type: "string" }, why: { type: "string" }, land: { type: "boolean" }, drop: { type: "boolean" },
   "over-gate": { type: "boolean" }, "over-risk": { type: "boolean" }, reason: { type: "string" }, base: { type: "string" }, gate: { type: "string" },
   "no-gate": { type: "boolean" }, "gate-timeout": { type: "string" }, goal: { type: "string" },
   own: { type: "string", multiple: true }, context: { type: "string" }, preset: { type: "string" },
@@ -60,7 +62,7 @@ type TextArg = (arg: string | undefined) => Promise<string>;
 type Arity = (n: number, m?: number) => void;
 
 /** Commands only the Human runs, never a seat. */
-const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update"]);
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update", "clean"]);
 /** Seat verbs the Human may run too. */
 const HUMAN_TOO = new Set(["incidents", "ack"]);
 
@@ -146,6 +148,12 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
       await redeliver(deps, project.id, me ? me.seat.name : null, seq, values.force === true);
       return 0;
     }
+    case "clean": {
+      arity(0);
+      const { project } = await projectHere(deps.env, cwd);
+      await cleanSlots(deps, project, values.force === true);
+      return 0;
+    }
     case "update": arity(0); await update(deps, { check: values["dry-run"] === true, version: values.version }); return 0;
     case "config": arity(0); await loadConfig(deps.env); deps.out(configPath(deps.env)); deps.out(`${dotenvPath(deps.env)} (keys such as JEV_API_KEY)`); return 0;
     case "calibrate": {
@@ -220,7 +228,7 @@ async function seatVerb(command: string, args: string[], v: Values, a: Actor, te
       arity(0);
       await openLane(deps, a.project, await loadConfig(deps.env), {
         title: v.title ?? "", outcome: v.outcome ?? "", acceptance: list(v.accept), outOfScope: list(v.out),
-        writeSet: list(v.write), humanWords: v.human ?? "", isolate: v.isolate === true,
+        writeSet: list(v.write), humanWords: v.human ?? "", home: homeOf(v), carry: v.carry === true, after: v.after ?? null,
       });
       return 0;
     case "amend-lane":
@@ -354,6 +362,16 @@ async function watch(deps: Deps, id: string, interval: number, once: boolean): P
     await watcher.settle().catch(() => undefined);
     await releaseLock(lock, token).catch(() => undefined);
   }
+}
+
+const HOMES = ["auto", "newBranch", "onBranch", "isolate"] as const;
+
+function homeOf(v: Values): Home | null {
+  if (v.isolate) return "isolate";
+  if (v.home === undefined) return null;
+  const home = HOMES.find((h) => h.toLowerCase() === v.home!.toLowerCase());
+  if (!home) throw new UsageError(`--home is one of ${HOMES.join(", ")}`);
+  return home;
 }
 
 function positiveInt(raw: string, name: string): number {

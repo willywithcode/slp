@@ -148,8 +148,9 @@ describe("the core loop", () => {
   it("brings the lane up to date with a moved base before landing", async () => {
     const w = await started();
     await w.as("sup", LANE);
-    // A second lane works in its own worktree while the first holds the checkout.
-    await w.as("sup", ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a doc", "--write", "docs/**"]);
+    // A second lane works in its own worktree while the first holds the checkout, when asked to.
+    await expect(w.as("sup", ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a doc", "--write", "docs/**"])).rejects.toThrow(/in use by lane L1/);
+    await w.as("sup", ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a doc", "--write", "docs/**", "--home", "isolate"]);
     const s = await w.state();
     const l2 = s.lanes.get("L2")!;
     expect(l2.inCheckout).toBe(false);

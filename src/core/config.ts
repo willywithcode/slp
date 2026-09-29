@@ -52,6 +52,13 @@ const ConfigSchema = z.object({
   // turns mail on; at most budgetPerDay per recipient.
   watch: z.object({ mail: z.boolean().default(false), budgetPerDay: z.number().int().positive().default(20) })
     .default({ mail: false, budgetPerDay: 20 }),
+  // Where lanes work (ADR 0018): auto (the checkout when clean, on base and
+  // free, else ask), newBranch, onBranch or isolate; and a command run in
+  // every new working copy before its seat starts.
+  lanes: z.object({
+    home: z.enum(["auto", "newBranch", "onBranch", "isolate"]).default("auto"),
+    setup: z.string().nullable().default(null),
+  }).default({ home: "auto", setup: null }),
   // The Human in the loop (ADR 0016, as seatworks' hitl): off, the Supervisor
   // answers seats' permission prompts for the Human; on, the Human does.
   human: z.object({ inLoop: z.boolean().default(false) }).default({ inLoop: false }),
@@ -93,6 +100,7 @@ export function defaultConfig(): Config {
     watch: { mail: false, budgetPerDay: 20 },
     jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
     human: { inLoop: false },
+    lanes: { home: "auto", setup: null },
     launchers: {
       claude: { agent: "claude", env: {}, prep: {} },
       codex: { agent: "codex", env: {}, prep: {} },

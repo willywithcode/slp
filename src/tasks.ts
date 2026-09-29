@@ -5,7 +5,8 @@ import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
 import type { Project } from "./core/project.js";
-import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto, removeWorktree } from "./git.js";
+import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto } from "./git.js";
+import { releaseCopy } from "./slots.js";
 import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
 import { changedLines } from "./risk.js";
@@ -130,7 +131,7 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
     if (opened.attention) deps.out(`NEEDS ATTENTION: ${opened.attention}`);
   } catch (error) {
     await append(deps.env, project.id, () => ({ kind: "task-cut" as const, task: id, reason: `it could not start: ${describe(error)}` }));
-    if (input.parallel && await removeWorktree(project.root, workdir)) await git(project.root, ["branch", "-D", branch]);
+    if (input.parallel && !(await releaseCopy(deps, project, workdir, id))) await git(project.root, ["branch", "-D", branch]);
     throw error;
   }
   return fold(await readLedger(deps.env, project.id)).tasks.get(id)!;
@@ -211,8 +212,9 @@ export async function acceptTask(a: Actor, id: string, note: string): Promise<vo
   await finishSeat(a, task, `task ${id} accepted`);
   let kept = "";
   if (task.mode === "parallel") {
-    if (await removeWorktree(project.root, task.workdir)) await git(project.root, ["branch", "-D", task.branch]);
-    else kept = `; its worktree changed since and was kept: ${task.workdir}`;
+    const why = await releaseCopy(deps, project, task.workdir, id);
+    if (!why) await git(project.root, ["branch", "-D", task.branch]);
+    else kept = `; its working copy was kept (${why}): ${task.workdir}`;
   }
   deps.out(`${id} accepted${merged ? ` and merged into ${lane.branch}` : ""}${kept}`);
 }
@@ -233,9 +235,9 @@ export async function cutTask(a: Actor, id: string, reason: string): Promise<voi
   await append(a.deps.env, a.project.id, () => ({ kind: "task-cut" as const, task: id, reason }));
   await finishSeat(a, task, `task ${id} cut`);
   if (task.mode === "parallel") {
-    const removed = await removeWorktree(a.project.root, task.workdir);
+    const why = await releaseCopy(a.deps, a.project, task.workdir, id);
     a.deps.out(`${id} cut; its branch ${task.branch} is kept` +
-      (removed ? "" : `, and so is its worktree, which has uncommitted changes: ${task.workdir}`));
+      (why ? `, and so is its working copy (${why}): ${task.workdir}` : ""));
     return;
   }
   const dirty = await dirtyPaths(task.workdir);
@@ -327,7 +329,7 @@ export async function diffOf(a: Actor, target: string): Promise<string> {
   let range: string;
   if (target === lane.id) {
     cwd = lane.workdir;
-    range = `${lane.base}...${lane.branch}`;
+    range = lane.home === "onBranch" ? `${lane.baseCommit}..${lane.branch}` : `${lane.base}...${lane.branch}`;
   } else {
     const task = a.state.tasks.get(target);
     if (!task || task.lane !== lane.id) throw new SlpError(`No task ${target} in lane ${lane.id} (or name the lane: ${lane.id})`);

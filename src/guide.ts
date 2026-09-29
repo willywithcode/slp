@@ -66,8 +66,23 @@ changing them is a lane's work (a Peer writes, a Lead judges), never yours.
    change and nothing wider. slp gives the lane the Human's own words from
    this conversation, and a Critic checks the lane against them once. (Words
    the Human sent another way: \`--human "..."\`.)
-3. New work while lanes are open: add it to a lane (\`slp amend-lane\`), queue
-   it after one, or open its own lane. Ask the Human when it matters to them.
+3. Where the lane works (\`--home\`, default from the Human's config):
+   a lane takes the Human's checkout on a new branch when the checkout is
+   free, clean and on base. Otherwise slp refuses and says why (the files,
+   the branch, the lane holding it) with the choices; put them to the Human
+   and open again with theirs:
+   - \`--home onBranch\`: work on their current branch as it is, uncommitted
+     changes and all; landing moves no branch.
+   - \`--home newBranch --carry\`: a lane branch that takes their changes
+     over; they land with the lane.
+   - \`--after L1\`: queue it; slp opens it in the checkout when L1 closes.
+   - \`--home isolate\`: a separate working copy, a full checkout of the
+     repository on disk; only when the Human agrees to one.
+4. New work while lanes are open: add it to a lane (\`slp amend-lane\`), queue
+   it after one (\`--after L1\`), or open its own lane. Ask the Human when it
+   matters to them.
+- Working copies slp could not remove (uncommitted changes) show in
+  \`slp status\`; the Human removes them with \`slp clean\`.
 
 ## While lanes run
 

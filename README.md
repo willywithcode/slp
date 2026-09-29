@@ -88,9 +88,39 @@ Your commands:
 | `slp watch` | run a watcher yourself (normally `slp start` does) |
 | `slp config` | path of the accounts, models, watch and Jev settings |
 | `slp update [--dry-run]` | install the latest slp release |
+| `slp clean [--force]` | remove working copies slp kept (`--force`: even with uncommitted changes) |
 | `slp stop [--force]` | close every seat |
 
 Seats see their own verbs with `slp guide`.
+
+### Where lanes work
+
+A lane works in your checkout, on a new branch `lane/L1-...`, when three
+things hold: no other lane is using the checkout, it has no uncommitted
+changes to tracked files (untracked files such as editor or engine caches do
+not count), and it is on the base branch (`main` unless set otherwise).
+
+Otherwise slp does not quietly make a copy of the repository. It refuses the
+lane, notifies you, and gives the Supervisor the reason (for example
+` M Assets/ThirdPartyService.cs`, or "in use by lane L1") and these choices:
+
+| Choice | What happens |
+| --- | --- |
+| `--home onBranch` | the lane works on your current branch as it is, uncommitted changes and all; its commits go straight onto it and landing moves no branch (it runs the gate and checks holds) |
+| `--home newBranch --carry` | a lane branch in your checkout that takes your uncommitted changes over; they are committed and land with the lane |
+| commit or stash first | then the lane opens as usual |
+| `--after L1` | the lane waits in a queue; slp opens it in your checkout when L1 closes (`slp status` lists queued lanes) |
+| `--home isolate` | a separate working copy under `~/.slp/projects/<id>/slots/`: a **full checkout of the repository** on disk (for a large project, that is its full size again, plus its build caches) |
+
+The default for every lane is `"lanes": { "home": "auto" }` in the config;
+set it to `onBranch`, `newBranch` or `isolate` to always work that way.
+Parallel tasks (`--parallel`) also get their own full working copy.
+
+When a lane or task ends, slp removes its copy completely (the folder too).
+It keeps a copy only while tracked files in it hold uncommitted work; untracked
+files do not keep it. Kept copies show in `slp status`, you are notified, the
+watcher tries again every 10 minutes, and `slp clean` removes them
+(`--force` discards their changes).
 
 The full workflow, a runbook for what to do when the watch pings you, and
 troubleshooting: [docs/product/workflow.md](docs/product/workflow.md).
