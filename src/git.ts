@@ -10,8 +10,8 @@ import { isShimDir } from "./permissions.js";
 
 export interface GitResult { code: number; stdout: string; stderr: string }
 
-/** slp's own git never goes through a seat's shim (a seat's `slp accept` merges for it). */
-function gitEnv(): NodeJS.ProcessEnv {
+/** slp's own git (and commands it runs for a seat) never go through a seat's shim (a seat's `slp accept` merges for it). */
+export function gitEnv(): NodeJS.ProcessEnv {
   const key = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   const path = (process.env[key] ?? "").split(delimiter).filter((entry) => !isShimDir(entry)).join(delimiter);
   return { ...process.env, [key]: path };

@@ -116,6 +116,13 @@ The default for every lane is `"lanes": { "home": "auto" }` in the config;
 set it to `onBranch`, `newBranch` or `isolate` to always work that way.
 Parallel tasks (`--parallel`) also get their own full working copy.
 
+A new copy is made ready before its seat starts (ADR 0019): the git-ignored
+files your `.worktreeinclude` names are copied in (local settings, keys a
+build needs), then `"lanes": { "setup": "..." }` runs there, for example
+`git submodule update --init --recursive`; the Lead hears how it went. A
+lane whose write set reaches into a submodule gets a warning: commits there
+do not land with the lane.
+
 When a lane or task ends, slp removes its copy completely (the folder too).
 It keeps a copy only while tracked files in it hold uncommitted work; untracked
 files do not keep it. Kept copies show in `slp status`, you are notified, the

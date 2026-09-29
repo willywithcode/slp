@@ -8,6 +8,7 @@ import { contextPath, type Project } from "./core/project.js";
 import { readFile } from "node:fs/promises";
 import { criticPrefilter } from "./jev/desk.js";
 import { addWorktree, currentBranch, dirtyPaths, git, gitOk, head, statusLines } from "./git.js";
+import { prepareCopy, submoduleWarning } from "./prepare.js";
 import { releaseCopy } from "./slots.js";
 import { isCatchAll, matches, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
@@ -218,11 +219,16 @@ export async function openLane(deps: Deps, project: Project, config: Config, inp
   }
   const lane = fold(await readLedger(deps.env, project.id)).lanes.get(id)!;
   deps.out(`lane ${id} opened ${home === "onBranch" ? `on your branch ${branch}` : `on ${branch}`} (${inCheckout ? "your checkout" : workdir})`);
+  // A new copy is made ready before its Lead starts (ADR 0019); the Lead hears how it went.
+  const notes = home === "isolate" ? await prepareCopy(project.root, workdir, config, before.settings.gateTimeoutMinutes * 60_000) : [];
+  const sub = await submoduleWarning(project.root, input.writeSet);
+  if (sub) notes.push(sub);
+  for (const note of notes) deps.out(note);
 
   const lead = await openSeat(deps, project, config, {
     name: id, role: "lead", lane: id, task: null, cwd: workdir, place: { kind: "tab", label: `${id} ${input.title}`.slice(0, 40) },
     intro: intro(id, "lead", ` (lane ${id}: ${input.title})`, config.launchers[config.roles.lead.use[0]!]?.agent ?? "claude"),
-    brief: { letter: "DIRECTIVE", from: "sup", text: directive(lane) },
+    brief: { letter: "DIRECTIVE", from: "sup", text: [directive(lane), ...notes].join("\n\n") },
   });
   if (lead.attention) deps.out(`NEEDS ATTENTION: ${lead.attention}`);
 
@@ -264,6 +270,8 @@ export async function amendLane(deps: Deps, project: Project, laneId: string, a:
   if (!lane || !lane.open) throw new SlpError(`No open lane ${laneId}`);
   if (!a.why.trim()) throw new SlpError("Say why: --why \"...\"");
   if (a.writeSet) checkWriteSet(state, a.writeSet, laneId);
+  const sub = a.writeSet ? await submoduleWarning(project.root, a.writeSet) : null;
+  if (sub) deps.out(sub);
   await append(deps.env, project.id, () => ({
     kind: "lane-amend" as const, lane: laneId, why: a.why,
     ...(a.outcome !== undefined ? { outcome: a.outcome } : {}),

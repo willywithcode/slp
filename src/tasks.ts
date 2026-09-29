@@ -6,6 +6,7 @@ import { append, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
 import type { Project } from "./core/project.js";
 import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto } from "./git.js";
+import { prepareCopy } from "./prepare.js";
 import { releaseCopy } from "./slots.js";
 import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
@@ -120,7 +121,11 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
   const draft = { id, title: input.title, goal: input.goal, acceptance: input.acceptance, owned: input.owned,
     outOfScope: input.outOfScope, context: input.context, branch, workdir, skills };
   try {
-    if (input.parallel) await addWorktree(project.root, workdir, branch, laneHead);
+    if (input.parallel) {
+      await addWorktree(project.root, workdir, branch, laneHead);
+      // Made ready before its Peer starts (ADR 0019); the Lead reads how it went here.
+      for (const note of await prepareCopy(project.root, workdir, config, a.state.settings.gateTimeoutMinutes * 60_000)) deps.out(note);
+    }
     const opened = await openSeat(deps, project, config, {
       name: id, role: "peer", lane: lane.id, task: id, cwd: workdir, preset: input.preset,
       place: { kind: "split", from: a.seat.paneId, direction: "right" },
