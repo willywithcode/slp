@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/core/config.js";
 import { dirtyPaths } from "../src/git.js";
-import { claudeSettings, gitDenied, isShimDir, writeGitShim } from "../src/permissions.js";
+import { choicePrompt } from "../src/permit.js";
+import { claudeSettings, gitDenied, isShimDir, writeClaudeSettings, writeGitShim } from "../src/permissions.js";
 import { Watcher, watchTiming } from "../src/watcher.js";
 import { tempDir, tempRepo, World } from "./helpers.js";
 
@@ -22,13 +23,33 @@ describe("role permissions", () => {
     expect(claudeSettings("peer", false, "/h").permissions.deny).not.toContain("Edit");
   });
 
-  it("runs without asking only where a sandbox holds the seat", () => {
+  it("auto (the default) runs without asking on every platform, sandboxed where it can be; ask asks", () => {
     const windows = claudeSettings("lead", false, "/h");
-    expect(windows.permissions.defaultMode).toBeUndefined();
+    expect(windows.permissions.defaultMode).toBe("bypassPermissions");
+    expect(windows.skipDangerousModePermissionPrompt).toBe(true);
     expect(windows.sandbox).toBeUndefined();
     const sandboxed = claudeSettings("lead", true, "/h");
     expect(sandboxed.permissions.defaultMode).toBe("bypassPermissions");
     expect(sandboxed.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, filesystem: { allowWrite: ["/h"] } });
+    const ask = claudeSettings("lead", false, "/h", "ask");
+    expect(ask.permissions.defaultMode).toBeUndefined();
+    expect(ask.skipDangerousModePermissionPrompt).toBeUndefined();
+    // Denies hold in every mode.
+    for (const s of [windows, sandboxed, ask]) expect(s.permissions.deny).toEqual(expect.arrayContaining(["Edit", "Bash(git commit *)", "Read(~/.slp/.env)"]));
+  });
+
+  it("merges the owner's allow rules for a role; slp's deny still wins", async () => {
+    const lead = claudeSettings("lead", false, "/h", "ask", ["Bash(dotnet build*)", "Edit"]);
+    expect(lead.permissions.allow).toEqual(expect.arrayContaining(["Bash(dotnet build*)", "Bash(slp *)"]));
+    expect(lead.permissions.deny).toContain("Edit");
+    const home = await tempDir("home-");
+    const c = defaultConfig();
+    c.roles.lead.allow = ["Bash(dotnet build*)"];
+    c.permissions.mode = "ask";
+    const path = await writeClaudeSettings({ SLP_HOME: home }, "lead", c);
+    const written = JSON.parse(await readFile(path, "utf8"));
+    expect(written.permissions.allow).toContain("Bash(dotnet build*)");
+    expect(written.permissions.defaultMode).toBeUndefined();
   });
 });
 
@@ -73,6 +94,7 @@ describe("the git shim", () => {
   });
 });
 
+const NL = String.fromCharCode(10);
 const LANE = ["open-lane", "--title", "Greeting", "--outcome", "greets", "--accept", "a", "--write", "src/**"];
 const CLAUDE_PROMPT = "● Checking\n Bash command\n   node -e \"console.log(1)\"\n   Run a quick check\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel";
 const CODEX_PROMPT = "• Running npm install\n  Would you like to run the following command?\n  $ npm install left-pad\n› 1. Yes, proceed (y)\n  3. No, and tell Codex what to do differently (esc)";
@@ -154,9 +176,64 @@ describe("slp permit (the Human out of the loop)", () => {
     v.cli.agents.get(vlead)!.status = "blocked";
     v.cli.screens.set(vlead, CLAUDE_PROMPT);
     const vw = new Watcher(v.deps(null, () => now), v.project);
-    await vw.tick();
-    now += watchTiming.blockedMs + 1;
+    // In the loop, the Human hears at once.
     await vw.tick();
     expect(v.cli.notifications.find((n) => n.title.includes("L1 waits on you"))!.body).toContain("node -e");
+  });
+
+  it("the Supervisor's own permission prompt reaches the Human at once", async () => {
+    const now = Date.now();
+    const w = await team(false);
+    const sup = await w.pane("sup");
+    w.cli.agents.get(sup)!.status = "blocked";
+    w.cli.screens.set(sup, CLAUDE_PROMPT);
+    await new Watcher(w.deps(null, () => now), w.project).tick();
+    expect(w.cli.notifications.find((n) => n.title.includes("sup waits on you"))!.body).toContain("node -e");
+  });
+
+  it("a Yes/No slp does not recognise on an idle seat is reported after permitAfterMs", async () => {
+    let now = Date.now();
+    const w = await team(false);
+    const peer = await w.pane("L1-T1");
+    w.cli.screens.set(peer, ["Overwrite the generated file?", "❯ 1. Yes", "  2. No"].join(NL));
+    const watcher = new Watcher(w.deps(null, () => now), w.project);
+    await watcher.tick();
+    expect(w.cli.notifications).toEqual([]);
+    now += watchTiming.permitAfterMs + 1;
+    await watcher.tick();
+    await watcher.tick();
+    const told = w.cli.notifications.filter((n) => n.title.includes("L1-T1 waits on you"));
+    expect(told).toHaveLength(1);
+    expect(told[0]!.body).toContain("does not recognise");
+    expect(told[0]!.body).toContain("Overwrite the generated file");
+    expect((await w.inbox("L1")).at(-1)).toContain("L1-T1 waits on a prompt in its pane");
+    expect(w.cli.keys).toEqual([]);
+  });
+
+  it("takes its timings from the config", async () => {
+    const now = Date.now();
+    const w = await team(false);
+    const c = JSON.parse(await readFile(join(w.home, "config.json"), "utf8"));
+    c.watch = { ...c.watch, permitAfterMs: 0 };
+    await writeFile(join(w.home, "config.json"), JSON.stringify(c));
+    const lead = await w.pane("L1");
+    w.cli.agents.get(lead)!.status = "blocked";
+    w.cli.screens.set(lead, CLAUDE_PROMPT);
+    await new Watcher(w.deps(null, () => now), w.project).tick();
+    expect((await w.inbox("sup")).at(-1)).toMatch(/L1 asks permission for/);
+  });
+
+  it("knows a Yes/No menu or (y/n) at the bottom of a screen, not one scrolled away", () => {
+    expect(choicePrompt(["Continue?", "❯ 1. Yes", "  2. No"].join(NL))).toContain("Continue?");
+    expect(choicePrompt("Delete build cache? (y/n)")).toContain("Delete build cache");
+    expect(choicePrompt(["❯ 1. Yes", "  2. No", ...Array(20).fill("text"), "> "].join(NL))).toBeNull();
+    expect(choicePrompt("> ready")).toBeNull();
+  });
+});
+
+describe("the bypass warning", () => {
+  it("counts as a startup dialog: letters wait and nobody answers it", async () => {
+    const { showsStartupDialog } = await import("../src/letters.js");
+    expect(showsStartupDialog(["WARNING: Claude Code running in Bypass Permissions mode", "❯ 1. No, exit", "  2. Yes, I accept"].join(NL))).toBe(true);
   });
 });

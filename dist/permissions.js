@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { slpHome } from "./core/paths.js";
 import { writeAtomic } from "./core/fsutil.js";
 import { skillDeny } from "./skills.js";
-// Seat permissions (ADR 0016), after seatworks: seats run without asking
-// where a sandbox holds them, each role is denied what it must never do, and
-// a git shim on every seat's PATH refuses the git commands a role must not
-// run. Where no sandbox exists (Claude Code on Windows), seats keep asking,
-// with read and test commands allowed.
+// Seat permissions (ADR 0016, 0020), after seatworks: each role is denied
+// what it must never do, and a git shim on every seat's PATH refuses the git
+// commands a role must not run. In the default mode (auto) seats then run
+// without asking, as seatworks' seats do with the Human out of the loop, held
+// by those rules and, where Claude Code has one, its sandbox. In ask mode
+// they ask for anything not allowed.
 /** Git subcommands no seat runs: branches and working copies are slp's. */
 const GIT_NEVER = ["push", "pull", "checkout", "switch", "update-ref", "stash"];
 /** Git subcommands that move a branch: only a Peer, on its own branch. */
@@ -33,7 +34,8 @@ const SEAT_DENY = [
     "Edit(~/.gitconfig)", "Edit(~/.config/git/**)",
     "Bash(git branch -f *)", "Bash(git branch -D *)", "Bash(git branch --force *)",
 ];
-const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+// Edit covers every file-editing tool Claude Code has (MultiEdit is gone; a rule for it only warns).
+const WRITE_TOOLS = ["Edit", "Write", "NotebookEdit"];
 /** Commands a reading seat may run without asking where it cannot be sandboxed. */
 const READ_AND_TEST = [
     "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git show*)",
@@ -42,33 +44,34 @@ const READ_AND_TEST = [
 ];
 /**
  * Claude Code settings for a role. `sandboxed`: the platform has Claude
- * Code's sandbox (not Windows today): seats then run without asking, held by
- * the sandbox, like seatworks; otherwise they ask for anything not allowed.
+ * Code's sandbox (not Windows today). `mode` auto: the seat never asks
+ * (bypass; deny rules still refuse); ask: it asks for anything not allowed.
+ * `extraAllow`: the owner's own rules for the role; a deny still wins.
  */
-export function claudeSettings(role, sandboxed, home) {
+export function claudeSettings(role, sandboxed, home, mode = "auto", extraAllow = []) {
     const deny = [...SEAT_DENY, ...bashDeny(gitDenied(role)), ...skillDeny()];
     if (role !== "peer")
         deny.push(...WRITE_TOOLS, "Bash(sleep *)");
-    const allow = ["Bash(slp *)", "Bash(slp.cmd *)", ...(role === "peer" ? [] : READ_AND_TEST)];
-    if (!sandboxed)
-        return { permissions: { allow, deny } };
-    return {
-        permissions: { defaultMode: "bypassPermissions", allow, deny },
-        // The seat's `slp` writes the team's ledger under slp's home.
-        sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, network: { allowLocalBinding: true }, filesystem: { allowWrite: [home] } },
-        skipDangerousModePermissionPrompt: true,
-    };
+    const allow = [...new Set(["Bash(slp *)", "Bash(slp.cmd *)", ...(role === "peer" ? [] : READ_AND_TEST), ...extraAllow])];
+    // The seat's `slp` writes the team's ledger under slp's home.
+    const sandbox = sandboxed
+        ? { sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, network: { allowLocalBinding: true }, filesystem: { allowWrite: [home] } } }
+        : {};
+    if (mode === "ask")
+        return { permissions: { allow, deny }, ...sandbox };
+    return { permissions: { defaultMode: "bypassPermissions", allow, deny }, ...sandbox, skipDangerousModePermissionPrompt: true };
 }
 /** Claude Code's sandbox exists on macOS and Linux, not (yet) on Windows. */
 export function claudeSandboxed(platform = process.platform) {
     return platform !== "win32";
 }
 /** Write the role's settings file and return its path. */
-export async function writeClaudeSettings(env, role, platform = process.platform) {
+export async function writeClaudeSettings(env, role, config, platform = process.platform) {
     const dir = join(slpHome(env), "settings");
     await mkdir(dir, { recursive: true });
     const path = join(dir, `claude-${role}.json`);
-    await writeAtomic(path, `${JSON.stringify(claudeSettings(role, claudeSandboxed(platform), slpHome(env)), null, 2)}\n`);
+    const settings = claudeSettings(role, claudeSandboxed(platform), slpHome(env), config.permissions.mode, config.roles[role]?.allow ?? []);
+    await writeAtomic(path, `${JSON.stringify(settings, null, 2)}\n`);
     return path;
 }
 // ------------------------------------------------------------------ git shim

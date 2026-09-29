@@ -77,8 +77,11 @@ a Critic compares the two once and tells the Supervisor where they may differ.
 
 ### 4. How a lane runs
 
-- The first lane works in your checkout on branch `lane/L1-...` (it must be
-  clean); later lanes get their own worktree under `~/.slp`.
+- A lane works in your checkout on branch `lane/L1-...` when the checkout is
+  free, clean and on base. Otherwise slp refuses it with the reason and the
+  choices (`--home onBranch`, `--home newBranch --carry`, `--after L1`,
+  `--home isolate` for a full separate copy); the Supervisor settles it with
+  you. See the README, "Where lanes work".
 - The Lead briefs Peers with outcomes, acceptance and owned paths. Tasks in
   the lane's copy run one at a time; `--parallel` tasks get their own copy and
   are merged into the lane when accepted.
@@ -183,4 +186,5 @@ never pushes: push landed work through your usual workflow.
 | `queued` letters stay queued | No watcher runs | `slp watch` in a normal terminal |
 | "is the Human's command" | A seat tried `start`, `stop`, `watch`, `intro` or `calibrate` | Nothing; those are yours |
 | "moved while the lane was being landed" | Someone committed to the base during landing | Land again |
-| "has uncommitted work" on drop, or a kept worktree | slp never discards work | Have a Peer commit or discard it, then retry |
+| "has uncommitted work" on drop, or a kept worktree | slp never discards work | Have a Peer commit or discard it, then retry; `slp clean` removes kept copies (`--force` discards them) |
+| "Lane ... not opened" | the checkout is dirty, busy or off base | Choose one of the options it lists (the Supervisor asks you) |

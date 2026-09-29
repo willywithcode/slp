@@ -11,7 +11,7 @@ import { commitFile, sh, World } from "./helpers.js";
 // Regressions for findings of the independent reviews of v0.3.
 
 const LANE = ["open-lane", "--title", "Greeting", "--outcome", "greets", "--accept", "a", "--write", "src/**"];
-const DOCS = ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a", "--write", "docs/**"];
+const DOCS = ["open-lane", "--title", "Docs", "--outcome", "docs", "--accept", "a", "--write", "docs/**", "--home", "isolate"];
 
 async function started(): Promise<World> {
   const w = await World.create();
@@ -81,17 +81,29 @@ describe("work is never discarded", () => {
     expect(existsSync(join(l2.workdir, "draft.md"))).toBe(true);
   });
 
-  it("cutting a parallel task keeps a worktree that has uncommitted changes", async () => {
+  it("cutting a parallel task keeps a copy only while tracked files hold uncommitted work", async () => {
     const w = await started();
     await w.as("sup", LANE);
     w.cli.idleAll();
     await w.as("L1", ["start-task", "--title", "b", "--goal", "g", "--accept", "x", "--own", "src/b/**", "--parallel"]);
     const t = (await w.state()).tasks.get("L1-T1")!;
-    await writeFile(join(t.workdir, "wip.txt"), "wip\n");
+    await writeFile(join(t.workdir, "README.md"), "changed but not committed\n");
+    await writeFile(join(t.workdir, "cache.utmp"), "tool output\n");
     w.cli.idleAll();
     await w.as("L1", ["cut", "L1-T1", "wrong idea"]);
-    expect(existsSync(join(t.workdir, "wip.txt"))).toBe(true);
-    expect(w.out.at(-1)).toMatch(/worktree, which has uncommitted changes/);
+    expect(existsSync(join(t.workdir, "README.md"))).toBe(true);
+    expect(w.out.at(-1)).toMatch(/working copy \(uncommitted changes to 1 tracked file\(s\): README\.md\)/);
+    const kept = (await w.state()).keptSlots.get(t.workdir)!;
+    expect(kept).toMatchObject({ owner: "L1-T1" });
+    expect(w.cli.notifications.some((n) => n.title.includes("kept L1-T1's working copy"))).toBe(true);
+
+    // Only untracked files (tool caches): removed, folder and all.
+    await w.as("L1", ["start-task", "--title", "c", "--goal", "g", "--accept", "x", "--own", "src/c/**", "--parallel"]);
+    const t2 = (await w.state()).tasks.get("L1-T2")!;
+    await writeFile(join(t2.workdir, "Library.cache"), "x\n");
+    w.cli.idleAll();
+    await w.as("L1", ["cut", "L1-T2", "not needed"]);
+    expect(existsSync(t2.workdir)).toBe(false);
   });
 });
 
@@ -332,5 +344,43 @@ describe("fourth review round", () => {
     await watchOnce(w);
     expect((await w.state()).lanes.get("L1")!.open).toBe(true);
     expect((await w.inbox("sup")).at(-1)).toMatch(/changed after the Human agreed/);
+  });
+});
+
+describe("v0.4 review round", () => {
+  it("on the Human's own branch, a merge after the lane review is not covered by it", async () => {
+    const w = await World.create();
+    const { laneReviewed } = await import("../src/risk.js");
+    sh(w.repo, "checkout", "-q", "-b", "other");
+    await commitFile(w.repo, "src/other.js", "unreviewed\n");
+    sh(w.repo, "checkout", "-q", "-b", "feature", "main");
+    await commitFile(w.repo, "src/a.js", "a\n");
+    const reviewed = sh(w.repo, "rev-parse", "HEAD");
+    sh(w.repo, "merge", "-q", "--no-ff", "-m", "Merge other", "other");
+    const state = { reviews: new Map([["R1", { id: "R1", lane: "L1", target: "L1", focus: "", seat: "R1", head: reviewed, done: { summary: "ok" } }]]) } as never;
+    const onBranch = { id: "L1", base: "feature", branch: "feature", home: "onBranch" } as never;
+    expect(await laneReviewed(w.repo, state, onBranch, sh(w.repo, "rev-parse", "HEAD"))).toBe(false);
+  });
+
+  it("a queued lane waits while a drop is still switching the checkout back", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    await w.as("sup", [...DOCS.slice(0, -2), "--after", "L1"]);
+    const l1 = (await w.state()).lanes.get("L1")!;
+    // The drop recorded, its teardown not finished: the checkout is still on L1's branch.
+    await append({ SLP_HOME: w.home }, w.project, () => ({ kind: "lane-close" as const, lane: "L1", landed: false, reason: "x", commit: null, overGate: false }));
+    for (const seat of ["L1", "L1-critic"]) {
+      if ((await w.state()).seats.get(seat)?.live) await append({ SLP_HOME: w.home }, w.project, () => ({ kind: "seat-stop" as const, name: seat, reason: "x" }));
+    }
+    expect(sh(w.repo, "branch", "--show-current")).toBe(l1.branch);
+    await watchOnce(w);
+    let s = await w.state();
+    expect(s.queued.has("L2")).toBe(true);
+    expect(s.lanes.has("L2")).toBe(false);
+    // Once the checkout is back on base, it opens.
+    sh(w.repo, "checkout", "-q", "main");
+    await watchOnce(w);
+    s = await w.state();
+    expect(s.lanes.get("L2")).toMatchObject({ open: true, inCheckout: true });
   });
 });

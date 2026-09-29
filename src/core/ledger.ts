@@ -53,7 +53,21 @@ export const EventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("lane-open"), ...base, lane: z.string(), title: text, outcome: text, acceptance: list,
     outOfScope: list, writeSet: list, branch: z.string(), workdir: z.string(), inCheckout: z.boolean(),
     base: z.string(), baseCommit: z.string(), humanWords: text,
+    // Where it works (ADR 0018); absent in older ledgers: inCheckout says newBranch or isolate.
+    home: z.enum(["newBranch", "onBranch", "isolate"]).optional(),
+    // The Human's uncommitted changes the lane took over (--carry): they land with it.
+    carried: list.optional(),
   }),
+  // A lane that waits for another to close, then opens in the Human's checkout (ADR 0018).
+  z.object({
+    kind: z.literal("lane-queued"), ...base, lane: z.string(), after: z.string(),
+    input: z.object({
+      title: text, outcome: text, acceptance: list, outOfScope: list, writeSet: list, humanWords: text,
+      home: z.enum(["auto", "newBranch", "onBranch", "isolate"]).optional(), carry: z.boolean().optional(),
+    }),
+  }),
+  // A queued lane that will not open: dropped, or it could not open when its turn came.
+  z.object({ kind: z.literal("lane-unqueued"), ...base, lane: z.string(), reason: text }),
   z.object({
     kind: z.literal("lane-amend"), ...base, lane: z.string(), why: text, outcome: text.optional(),
     acceptance: list.optional(), outOfScope: list.optional(), writeSet: list.optional(),
@@ -122,6 +136,11 @@ export const EventSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("permit"), ...base, seat: z.string(), allow: z.boolean(), why: text, by: z.string(), prompt: text,
   }),
+  // A working copy slp could not remove (it holds work), and its removal later.
+  z.object({ kind: z.literal("slot-kept"), ...base, path: z.string(), owner: z.string(), why: text }),
+  z.object({ kind: z.literal("slot-cleared"), ...base, path: z.string() }),
+  // A released copy kept clean for the next lane or task (lanes.reuseCopies, ADR 0018).
+  z.object({ kind: z.literal("slot-free"), ...base, path: z.string() }),
   // Jev (phases 5-6): one recorded decision.
   z.object({
     kind: z.literal("jev"), ...base, point: z.string(), subject: z.string(), mode: z.enum(["shadow", "act"]),

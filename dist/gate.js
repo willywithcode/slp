@@ -54,11 +54,11 @@ function killTree(child) {
     }
 }
 /** Run the gate in `cwd` through the platform shell, bounded by `timeoutMs`. */
-export function runGate(command, cwd, timeoutMs) {
+export function runGate(command, cwd, timeoutMs, env = process.env) {
     const started = Date.now();
     return new Promise((resolve) => {
         // Its own process group on POSIX, so a timeout can kill the whole tree.
-        const child = spawn(command, { cwd, shell: true, windowsHide: true, env: process.env, detached: process.platform !== "win32" });
+        const child = spawn(command, { cwd, shell: true, windowsHide: true, env, detached: process.platform !== "win32" });
         let output = "";
         let settled = false;
         const done = (ok, extra = "") => {

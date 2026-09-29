@@ -36,7 +36,7 @@ by live Herdr runs on Windows with Claude Code and Codex seats.
 The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.5.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.4.0.tar.gz
 slp help
 ```
 
@@ -81,6 +81,7 @@ Your commands:
 | --- | --- |
 | `slp start` | Supervisor beside you, watcher below |
 | `slp status` | seats, lanes, tasks, open asks, waiting letters, landings |
+| `slp tell L1 "..."` | a word from you straight to a seat (a Lead, a Peer, the Supervisor); recorded, and the Supervisor gets a copy |
 | `slp incidents`, `slp ack I3 useful\|noise\|unknown` | what the watch found; your marks calibrate Jev |
 | `slp calibrate [--dry-run]` | Jev thresholds from the marks |
 | `slp intro <seat>` | resend a seat's first letter (after you answered its dialog, if no watcher ran) |
@@ -88,9 +89,51 @@ Your commands:
 | `slp watch` | run a watcher yourself (normally `slp start` does) |
 | `slp config` | path of the accounts, models, watch and Jev settings |
 | `slp update [--dry-run]` | install the latest slp release |
+| `slp clean [--force]` | remove working copies slp kept (`--force`: even with uncommitted changes) |
 | `slp stop [--force]` | close every seat |
 
 Seats see their own verbs with `slp guide`.
+
+### Where lanes work
+
+A lane works in your checkout, on a new branch `lane/L1-...`, when three
+things hold: no other lane is using the checkout, it has no uncommitted
+changes to tracked files (untracked files such as editor or engine caches do
+not count), and it is on the base branch (`main` unless set otherwise).
+
+Otherwise slp does not quietly make a copy of the repository. It refuses the
+lane, notifies you, and gives the Supervisor the reason (for example
+` M Assets/ThirdPartyService.cs`, or "in use by lane L1") and these choices:
+
+| Choice | What happens |
+| --- | --- |
+| `--home onBranch` | the lane works on your current branch as it is, uncommitted changes and all; its commits go straight onto it and landing moves no branch (it runs the gate and checks holds) |
+| `--home newBranch --carry` | a lane branch in your checkout that takes your uncommitted changes over; they are committed and land with the lane |
+| commit or stash first | then the lane opens as usual |
+| `--after L1` | the lane waits in a queue; slp opens it in your checkout when L1 closes (`slp status` lists queued lanes) |
+| `--home isolate` | a separate working copy under `~/.slp/projects/<id>/slots/`: a **full checkout of the repository** on disk (for a large project, that is its full size again, plus its build caches) |
+
+The default for every lane is `"lanes": { "home": "auto" }` in the config;
+set it to `onBranch`, `newBranch` or `isolate` to always work that way.
+Parallel tasks (`--parallel`) also get their own full working copy.
+
+A new copy is made ready before its seat starts (ADR 0019): the git-ignored
+files your `.worktreeinclude` names are copied in (local settings, keys a
+build needs), then `"lanes": { "setup": "..." }` runs there, for example
+`git submodule update --init --recursive`; the Lead hears how it went. A
+lane whose write set reaches into a submodule gets a warning: commits there
+do not land with the lane.
+
+When a lane or task ends, slp removes its copy completely (the folder too).
+It keeps a copy only while tracked files in it hold uncommitted work; untracked
+files do not keep it. Kept copies show in `slp status`, you are notified, the
+watcher tries again every 10 minutes, and `slp clean` removes them
+(`--force` discards their changes).
+
+For large projects, `"lanes": { "reuseCopies": true }` keeps a finished
+copy, cleaned but with its git-ignored build caches (a Unity `Library`, for
+example), for the next isolated lane or parallel task instead of deleting
+it; `slp clean` removes such copies too.
 
 The full workflow, a runbook for what to do when the watch pings you, and
 troubleshooting: [docs/product/workflow.md](docs/product/workflow.md).
@@ -159,11 +202,27 @@ can set up its sandbox (until then its Peers' commands fail).
 
 As in seatworks (ADR 0016): each role has what it must never do refused
 outright (no push, pull, checkout or forced branch moves; no other agents'
-logins, `~/.secrets` or git config; readers write and commit nothing), by
-Claude Code settings per role and a `git` shim on every seat's PATH. Codex
-seats never ask inside their sandbox. Claude seats run without asking inside
-Claude Code's sandbox on macOS and Linux; on Windows, where it does not exist
-yet, they ask, with read-only git and test commands allowed.
+logins, `~/.secrets` or git config; readers and Leads write no files), by
+Claude Code settings per role and a `git` shim on every seat's PATH.
+
+Everything else runs without asking (ADR 0020, `"permissions": { "mode":
+"auto" }`, the default): Claude seats in bypass mode, held by those rules
+(and Claude Code's sandbox on macOS and Linux); Codex seats never ask inside
+their sandbox. You are asked about the work (ideas, design, technology), not
+for leave to edit files. `"mode": "ask"` brings Claude Code's prompts back.
+
+Allow more per role, for `ask` mode or tools you want pre-approved:
+
+```json
+"roles": { "lead": { "use": ["claude"], "allow": ["Bash(dotnet build*)"] } }
+```
+
+slp's deny rules still win. A prompt that does appear: a permission prompt
+goes to the Supervisor after 20 s (`watch.permitAfterMs`) while you are out
+of the loop; the Supervisor's own prompts, and all of them with
+`"human": { "inLoop": true }`, notify you at once; a Yes/No slp does not
+recognise is reported to you after 20 s; anything else after 3 minutes
+(`watch.blockedMs`). The watcher looks every `watch.intervalSeconds` (5).
 
 ## Repository skills
 

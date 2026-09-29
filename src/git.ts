@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { delimiter } from "node:path";
 import { SlpError } from "./core/errors.js";
 import { isShimDir } from "./permissions.js";
@@ -8,8 +10,8 @@ import { isShimDir } from "./permissions.js";
 
 export interface GitResult { code: number; stdout: string; stderr: string }
 
-/** slp's own git never goes through a seat's shim (a seat's `slp accept` merges for it). */
-function gitEnv(): NodeJS.ProcessEnv {
+/** slp's own git (and commands it runs for a seat) never go through a seat's shim (a seat's `slp accept` merges for it). */
+export function gitEnv(): NodeJS.ProcessEnv {
   const key = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   const path = (process.env[key] ?? "").split(delimiter).filter((entry) => !isShimDir(entry)).join(delimiter);
   return { ...process.env, [key]: path };
@@ -46,12 +48,17 @@ export async function head(cwd: string, ref = "HEAD"): Promise<string> {
   return gitOk(cwd, ["rev-parse", ref]);
 }
 
+/** `git status --porcelain` lines ("XY path"), with or without untracked files. */
+export async function statusLines(cwd: string, untracked = true): Promise<string[]> {
+  // Not trimmed as a whole: the first line's leading status column matters ("XY path").
+  const r = await git(cwd, ["status", "--porcelain", `--untracked-files=${untracked ? "all" : "no"}`]);
+  if (r.code !== 0) throw new SlpError(`git status failed in ${cwd}: ${(r.stderr || r.stdout).trim()}`);
+  return r.stdout.split(/\r?\n/).filter((l) => l.length > 3).map((l) => l.trimEnd());
+}
+
 /** Uncommitted changes (tracked or untracked), as porcelain paths. */
 export async function dirtyPaths(cwd: string): Promise<string[]> {
-  // Not trimmed as a whole: the first line's leading status column matters ("XY path").
-  const r = await git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
-  if (r.code !== 0) throw new SlpError(`git status failed in ${cwd}: ${(r.stderr || r.stdout).trim()}`);
-  return r.stdout.split(/\r?\n/).filter((l) => l.length > 3).map((l) => l.slice(3).trim());
+  return (await statusLines(cwd)).map((l) => l.slice(3).trim());
 }
 
 export async function branchExists(cwd: string, branch: string): Promise<boolean> {
@@ -75,21 +82,55 @@ export async function addWorktree(repo: string, path: string, branch: string, fr
   await gitOk(repo, ["worktree", "add", "-b", branch, path, from]);
 }
 
-/**
- * Remove a worktree slp made, only if it holds no uncommitted work (git
- * refuses otherwise). Returns false when it was kept. A worktree already
- * gone counts as removed.
- */
-export async function removeWorktree(repo: string, path: string): Promise<boolean> {
-  const r = await git(repo, ["worktree", "remove", path]);
-  await git(repo, ["worktree", "prune"]);
-  if (r.code === 0) return true;
-  return !(await worktrees(repo)).some((w) => samePath(w.path, path));
+/** Uncommitted changes to tracked files only: what a working copy would lose if removed. */
+export async function trackedChanges(cwd: string): Promise<string[]> {
+  return (await statusLines(cwd, false)).map((l) => l.slice(3).trim());
 }
 
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => p.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
-  return norm(a) === norm(b);
+/**
+ * Remove a worktree slp made, as seatworks does: detached first (so its
+ * branch is free), removed by git, then its folder deleted if git left it.
+ * Kept only while tracked files hold uncommitted work; untracked files
+ * (tool caches, Library, .utmp) do not keep it. Returns why it was kept, or
+ * null when it is gone (already gone counts). `force` (the Human's
+ * `slp clean --force`) discards even tracked changes.
+ */
+export async function removeWorktree(repo: string, path: string, force = false): Promise<string | null> {
+  if (existsSync(path)) {
+    const tracked = force ? [] : await trackedChanges(path).catch(() => null);
+    if (tracked === null) {
+      // Not a readable worktree any more: only its folder is left.
+    } else if (tracked.length) {
+      return `uncommitted changes to ${tracked.length} tracked file(s): ${tracked.slice(0, 5).join(", ")}`;
+    } else {
+      await git(path, ["switch", "--detach"]);
+      await git(repo, ["worktree", "remove", "--force", path]);
+    }
+    if (existsSync(path)) {
+      try {
+        await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      } catch (error) {
+        await git(repo, ["worktree", "prune"]);
+        return `its folder could not be deleted (${(error as Error).message.split("\n")[0]}); a program may hold a file open`;
+      }
+    }
+  }
+  await git(repo, ["worktree", "prune"]);
+  return null;
+}
+
+/**
+ * Ready a worktree for reuse: only when tracked files are clean; untracked
+ * files git does not ignore are removed, ignored ones (build caches, Library)
+ * kept, and it is detached so its branch is free. Returns why not, or null.
+ */
+export async function freeWorktree(path: string): Promise<string | null> {
+  const tracked = await trackedChanges(path).catch(() => null);
+  if (tracked === null) return "it is not a working copy";
+  if (tracked.length) return "tracked files hold uncommitted changes";
+  const cleaned = await git(path, ["clean", "-fd"]);
+  const detached = cleaned.code === 0 ? await git(path, ["switch", "--detach"]) : cleaned;
+  return detached.code === 0 ? null : (detached.stderr || detached.stdout).trim();
 }
 
 /** Merge `from` into the branch checked out at `cwd`; aborts and reports on conflict. */
