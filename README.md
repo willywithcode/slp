@@ -36,7 +36,7 @@ by live Herdr runs on Windows with Claude Code and Codex seats.
 The built CLI is committed in `dist/`:
 
 ```sh
-npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.3.5.tar.gz
+npm install -g https://github.com/willywithcode/slp/archive/refs/tags/v0.4.0.tar.gz
 slp help
 ```
 
