@@ -119,6 +119,20 @@ export async function removeWorktree(repo: string, path: string, force = false):
   return null;
 }
 
+/**
+ * Ready a worktree for reuse: only when tracked files are clean; untracked
+ * files git does not ignore are removed, ignored ones (build caches, Library)
+ * kept, and it is detached so its branch is free. Returns why not, or null.
+ */
+export async function freeWorktree(path: string): Promise<string | null> {
+  const tracked = await trackedChanges(path).catch(() => null);
+  if (tracked === null) return "it is not a working copy";
+  if (tracked.length) return "tracked files hold uncommitted changes";
+  const cleaned = await git(path, ["clean", "-fd"]);
+  const detached = cleaned.code === 0 ? await git(path, ["switch", "--detach"]) : cleaned;
+  return detached.code === 0 ? null : (detached.stderr || detached.stdout).trim();
+}
+
 /** Merge `from` into the branch checked out at `cwd`; aborts and reports on conflict. */
 export async function mergeInto(cwd: string, from: string, message: string): Promise<{ ok: true } | { ok: false; conflicts: string[] }> {
   const r = await git(cwd, ["merge", "--no-ff", "--no-edit", "-m", message, from]);

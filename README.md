@@ -81,6 +81,7 @@ Your commands:
 | --- | --- |
 | `slp start` | Supervisor beside you, watcher below |
 | `slp status` | seats, lanes, tasks, open asks, waiting letters, landings |
+| `slp tell L1 "..."` | a word from you straight to a seat (a Lead, a Peer, the Supervisor); recorded, and the Supervisor gets a copy |
 | `slp incidents`, `slp ack I3 useful\|noise\|unknown` | what the watch found; your marks calibrate Jev |
 | `slp calibrate [--dry-run]` | Jev thresholds from the marks |
 | `slp intro <seat>` | resend a seat's first letter (after you answered its dialog, if no watcher ran) |
@@ -128,6 +129,11 @@ It keeps a copy only while tracked files in it hold uncommitted work; untracked
 files do not keep it. Kept copies show in `slp status`, you are notified, the
 watcher tries again every 10 minutes, and `slp clean` removes them
 (`--force` discards their changes).
+
+For large projects, `"lanes": { "reuseCopies": true }` keeps a finished
+copy, cleaned but with its git-ignored build caches (a Unity `Library`, for
+example), for the next isolated lane or parallel task instead of deleting
+it; `slp clean` removes such copies too.
 
 The full workflow, a runbook for what to do when the watch pings you, and
 troubleshooting: [docs/product/workflow.md](docs/product/workflow.md).

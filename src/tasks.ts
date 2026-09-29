@@ -5,9 +5,9 @@ import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
 import type { Project } from "./core/project.js";
-import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto } from "./git.js";
+import { changedFiles, commonDir, dirtyPaths, git, head, mergeInto } from "./git.js";
 import { prepareCopy } from "./prepare.js";
-import { releaseCopy } from "./slots.js";
+import { makeCopy, pickSlot, releaseCopy } from "./slots.js";
 import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
 import { changedLines } from "./risk.js";
@@ -99,6 +99,7 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
   // Reserved under the ledger lock: id, overlap and the one-writer rule are
   // checked against the record as it is now (a Lead may run commands in
   // parallel), then the task's copy is made.
+  let slot = { path: lane.workdir, reused: false };
   const started = await append(deps.env, project.id, (events) => {
     const tasks = [...fold(events).tasks.values()].filter((t) => t.lane === lane.id);
     const active = tasks.filter((t) => ACTIVE.has(t.state));
@@ -110,11 +111,12 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
         "Wait, or start this task with --parallel (its own copy).");
     }
     const id = `${lane.id}-T${tasks.length + 1}`;
+    slot = input.parallel ? pickSlot(fold(events), config, join(slots, id)) : { path: lane.workdir, reused: false };
     return {
       kind: "task-start" as const, lane: lane.id, task: id, title: input.title, goal: input.goal, acceptance: input.acceptance,
       owned: input.owned, outOfScope: input.outOfScope, context: input.context, mode: input.parallel ? "parallel" as const : "lane" as const,
       branch: input.parallel ? `task/${id}-${slug(input.title)}` : lane.branch,
-      workdir: input.parallel ? join(slots, id) : lane.workdir, baseCommit: laneHead, seat: id,
+      workdir: slot.path, baseCommit: laneHead, seat: id,
     };
   });
   const { task: id, branch, workdir } = started;
@@ -122,7 +124,7 @@ export async function startTask(a: Actor, config: Config, input: TaskInput): Pro
     outOfScope: input.outOfScope, context: input.context, branch, workdir, skills };
   try {
     if (input.parallel) {
-      await addWorktree(project.root, workdir, branch, laneHead);
+      await makeCopy(project.root, slot, branch, laneHead);
       // Made ready before its Peer starts (ADR 0019); the Lead reads how it went here.
       for (const note of await prepareCopy(project.root, workdir, config, a.state.settings.gateTimeoutMinutes * 60_000)) deps.out(note);
     }

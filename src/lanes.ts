@@ -7,9 +7,9 @@ import { configPath, projectDir } from "./core/paths.js";
 import { contextPath, type Project } from "./core/project.js";
 import { readFile } from "node:fs/promises";
 import { criticPrefilter } from "./jev/desk.js";
-import { addWorktree, currentBranch, dirtyPaths, git, gitOk, head, statusLines } from "./git.js";
+import { currentBranch, dirtyPaths, git, gitOk, head, statusLines } from "./git.js";
 import { prepareCopy, submoduleWarning } from "./prepare.js";
-import { releaseCopy } from "./slots.js";
+import { makeCopy, pickSlot, releaseCopy } from "./slots.js";
 import { isCatchAll, matches, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
 import { describe, sendLetter } from "./letters.js";
@@ -190,6 +190,7 @@ export async function openLane(deps: Deps, project: Project, config: Config, inp
   const hereCommit = branchHere ? await head(project.root, "HEAD") : null;
   const slots = join(projectDir(deps.env, project.id), "slots");
 
+  let slot = { path: project.root, reused: false };
   // The lane is reserved under the ledger lock (its id, write set and working
   // copy are decided against the current record), then its branch is made.
   const opened = await append(deps.env, project.id, (events) => {
@@ -199,10 +200,11 @@ export async function openLane(deps: Deps, project: Project, config: Config, inp
     checkWriteSet(state, input.writeSet, waitedFor);
     if (inCheckout && [...state.lanes.values()].some((l) => l.open && l.inCheckout)) throw new SlpError("Another lane took your checkout meanwhile; open this one again.");
     const id = queuedAs ?? nextLaneId(events);
+    if (!inCheckout) slot = pickSlot(state, config, join(slots, id));
     return {
       kind: "lane-open" as const, lane: id, title: input.title, outcome: input.outcome, acceptance: input.acceptance,
       outOfScope: input.outOfScope, writeSet: input.writeSet, branch: branchHere ?? `lane/${id}-${slug(input.title)}`,
-      workdir: inCheckout ? project.root : join(slots, id), inCheckout, home,
+      workdir: inCheckout ? project.root : slot.path, inCheckout, home,
       base: branchHere ?? base, baseCommit: hereCommit ?? baseCommit, humanWords,
       ...(home === "newBranch" && checkout.changes.length ? { carried: checkout.changes } : {}),
     };
@@ -210,11 +212,12 @@ export async function openLane(deps: Deps, project: Project, config: Config, inp
   const { lane: id, branch, workdir } = opened;
   try {
     if (home === "newBranch") await gitOk(project.root, ["checkout", "-b", branch, baseCommit]);
-    else if (home === "isolate") await addWorktree(project.root, workdir, branch, baseCommit);
+    else if (home === "isolate") await makeCopy(project.root, slot, branch, baseCommit);
   } catch (error) {
     await append(deps.env, project.id, () => ({
       kind: "lane-close" as const, lane: id, landed: false, reason: `its branch could not be made: ${describe(error)}`, commit: null, overGate: false,
     }));
+    if (slot.reused) await releaseCopy(deps, project, workdir, id).catch(() => undefined);
     throw error;
   }
   const lane = fold(await readLedger(deps.env, project.id)).lanes.get(id)!;

@@ -217,6 +217,10 @@ export function render(project: Project, state: State, now: number, contextFile:
     lines.push("", "Kept working copies (remove with `slp clean` once safe; `slp clean --force` discards their changes):");
     for (const k of state.keptSlots.values()) lines.push(`  ${k.path} (${k.owner}, ${ago(k.since)} ago): ${k.why}`);
   }
+  if (state.freeSlots.size) {
+    lines.push("", `Copies kept for reuse (${state.freeSlots.size}; \`slp clean\` removes them):`);
+    for (const p of state.freeSlots) lines.push(`  ${p}`);
+  }
   const asks = [...state.asks.values()].filter((a) => a.answer === null);
   if (asks.length) {
     lines.push("", "Open asks:");
@@ -234,6 +238,20 @@ export function render(project: Project, state: State, now: number, contextFile:
   }
   lines.push("", `concept: ${contextFile}`);
   return lines.join("\n");
+}
+
+/** The Human's own word to a seat: recorded, delivered, and copied to the Supervisor. */
+export async function humanTells(deps: Deps, project: Project, state: State, name: string, body: string): Promise<void> {
+  const seat = state.seats.get(name);
+  if (!seat?.live) throw new SlpError(`No live seat "${name}" (\`slp status\` lists them).`);
+  if (!body.trim()) throw new SlpError('Say something: slp tell <seat> "..."');
+  await sendLetter(deps, project.id, { letter: "MESSAGE", from: "human", to: name, lane: seat.lane, task: seat.task, text: body });
+  const copy = name !== "sup" && state.seats.get("sup")?.live === true;
+  if (copy) {
+    await sendLetter(deps, project.id, { letter: "NOTICE", from: "slp", to: "sup", lane: seat.lane, task: seat.task,
+      text: `The Human told ${name} directly (for your record; nothing to do unless it changes the plan):\n${body}` });
+  }
+  deps.out(`told ${name}${copy ? "; the Supervisor has a copy" : ""}`);
 }
 
 /** The Supervisor moves a seat whose account ran out to another (ADR 0011). */

@@ -47,6 +47,17 @@ a silent copy, a queue, and thorough cleanup.
   the Human's `slp clean` (`--force` discards changes; it also removes
   folders under slots that no open lane or task uses).
 
+- `"lanes": { "reuseCopies": true }` (off by default), after seatworks'
+  slot pool: a finished copy whose tracked files are clean is not deleted
+  but cleaned of untracked files git does not ignore (`git clean -fd`),
+  detached and recorded free (`slot-free`); its ignored files (Library,
+  build caches) stay. The next isolated lane or parallel task takes it with
+  `git switch -c`, and it is prepared again (ADR 0019). A copy is only ever
+  released by its current owner. `slp clean` removes free copies.
+- Sparse worktrees by write set were considered and not done: a lane's
+  Peers build and test the whole project (the gate runs there), which a
+  sparse copy would break. Reuse is the answer to the cost of copies.
+
 ## Consequences
 
 - The Supervisor must settle a refused lane with the Human; a lane never

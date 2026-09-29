@@ -27,7 +27,10 @@ const SHARED = `## What holds for every seat
   PowerShell here-string piped to \`slp.cmd <verb> ... -\`. Drafts on disk
   belong in a temporary directory, never in the repository.
 - Letters arrive between your turns as "[SLP <KIND> #n from <seat>]". Your
-  first letter carries your brief; there is nothing else to fetch.
+  first letter carries your brief; there is nothing else to fetch. A letter
+  from \`human\` is the Human's own word (the Supervisor has a copy): act on
+  it within your brief; anything that changes your outcome or scope goes to
+  whoever briefed you first.
 - Run each slp command on its own: one per call, never chained with \`&&\`,
   \`;\` or a pipe.`;
 

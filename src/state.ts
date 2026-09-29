@@ -118,6 +118,8 @@ export interface State {
   acks: EventOf<"ack">[];
   /** Working copies slp had to keep, by path. */
   keptSlots: Map<string, { path: string; owner: string; why: string; since: string }>;
+  /** Clean copies waiting to be reused. */
+  freeSlots: Set<string>;
   /** Lanes waiting for another to close. */
   queued: Map<string, EventOf<"lane-queued">>;
 }
@@ -126,7 +128,7 @@ export function fold(events: readonly SlpEvent[]): State {
   const s: State = {
     settings: { base: "main", gate: null, gateTimeoutMinutes: 30, landAs: "squash" },
     seats: new Map(), letters: [], lanes: new Map(), tasks: new Map(), reviews: new Map(), asks: new Map(),
-    gates: [], reports: [], incidents: [], acks: [], keptSlots: new Map(), queued: new Map(),
+    gates: [], reports: [], incidents: [], acks: [], keptSlots: new Map(), freeSlots: new Set(), queued: new Map(),
   };
   const letters = new Map<number, Letter>();
   for (const e of events) {
@@ -164,6 +166,7 @@ export function fold(events: readonly SlpEvent[]): State {
       }
       case "lane-open":
         s.queued.delete(e.lane);
+        s.freeSlots.delete(e.workdir);
         s.lanes.set(e.lane, {
           id: e.lane, title: e.title, outcome: e.outcome, acceptance: e.acceptance, outOfScope: e.outOfScope,
           writeSet: e.writeSet, branch: e.branch, workdir: e.workdir, inCheckout: e.inCheckout, base: e.base,
@@ -187,6 +190,7 @@ export function fold(events: readonly SlpEvent[]): State {
         break;
       }
       case "task-start":
+        s.freeSlots.delete(e.workdir);
         s.tasks.set(e.task, {
           id: e.task, lane: e.lane, title: e.title, goal: e.goal, acceptance: e.acceptance, owned: e.owned,
           outOfScope: e.outOfScope, context: e.context, mode: e.mode, branch: e.branch, workdir: e.workdir,
@@ -234,7 +238,8 @@ export function fold(events: readonly SlpEvent[]): State {
       case "incident": s.incidents.push(e); break;
       case "ack": s.acks.push(e); break;
       case "slot-kept": s.keptSlots.set(e.path, { path: e.path, owner: e.owner, why: e.why, since: s.keptSlots.get(e.path)?.since ?? e.ts }); break;
-      case "slot-cleared": s.keptSlots.delete(e.path); break;
+      case "slot-cleared": s.keptSlots.delete(e.path); s.freeSlots.delete(e.path); break;
+      case "slot-free": s.keptSlots.delete(e.path); s.freeSlots.add(e.path); break;
       case "lane-queued": s.queued.set(e.lane, e); break;
       case "lane-unqueued": s.queued.delete(e.lane); break;
       default: break;

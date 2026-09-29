@@ -73,7 +73,10 @@ const ConfigSchema = z.object({
   lanes: z.object({
     home: z.enum(["auto", "newBranch", "onBranch", "isolate"]).default("auto"),
     setup: z.string().nullable().default(null),
-  }).default({ home: "auto", setup: null }),
+    // Keep a finished copy (clean, detached, its git-ignored caches kept)
+    // for the next isolated lane or parallel task instead of deleting it.
+    reuseCopies: z.boolean().default(false),
+  }).default({ home: "auto", setup: null, reuseCopies: false }),
   // The Human in the loop (ADR 0016, as seatworks' hitl): off, the Supervisor
   // answers seats' permission prompts for the Human; on, the Human does.
   human: z.object({ inLoop: z.boolean().default(false) }).default({ inLoop: false }),
@@ -116,7 +119,7 @@ export function defaultConfig(): Config {
     permissions: { mode: "auto" },
     jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
     human: { inLoop: false },
-    lanes: { home: "auto", setup: null },
+    lanes: { home: "auto", setup: null, reuseCopies: false },
     launchers: {
       claude: { agent: "claude", env: {}, prep: {} },
       codex: { agent: "codex", env: {}, prep: {} },

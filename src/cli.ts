@@ -21,7 +21,7 @@ import { permit } from "./permit.js";
 import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
 import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask, type Actor } from "./tasks.js";
-import { closeLane, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
+import { closeLane, humanTells, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
 import { update } from "./update.js";
 import { Watcher } from "./watcher.js";
 
@@ -30,6 +30,7 @@ const USAGE = `slp: a Supervisor, Leads and Peers working on your repository thr
 The Human (in a Herdr pane, inside the repository):
   slp start                 open the Supervisor beside you and a watcher below
   slp status                where the work stands
+  slp tell <seat> TEXT      a word from you to a seat (recorded; the Supervisor gets a copy)
   slp stop [--force]        close every seat
   slp clean [--force]       remove working copies slp kept (--force: even with uncommitted changes)
   slp intro <seat>          resend a seat's introduction (after a trust dialog)
@@ -62,7 +63,7 @@ type TextArg = (arg: string | undefined) => Promise<string>;
 type Arity = (n: number, m?: number) => void;
 
 /** Commands only the Human runs, never a seat. */
-const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update", "clean"]);
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update", "clean", "tell"]);
 /** Seat verbs the Human may run too. */
 const HUMAN_TOO = new Set(["incidents", "ack"]);
 
@@ -146,6 +147,12 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
       const me = await whoAmI(deps.env).catch(() => null);
       const project = me?.project ?? (await projectHere(deps.env, cwd)).project;
       await redeliver(deps, project.id, me ? me.seat.name : null, seq, values.force === true);
+      return 0;
+    }
+    case "tell": {
+      arity(1, 2);
+      const { project, state } = await projectHere(deps.env, cwd);
+      await humanTells(deps, project, state, args[0]!, await text(args[1]));
       return 0;
     }
     case "clean": {

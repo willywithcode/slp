@@ -139,6 +139,8 @@ export const EventSchema = z.discriminatedUnion("kind", [
   // A working copy slp could not remove (it holds work), and its removal later.
   z.object({ kind: z.literal("slot-kept"), ...base, path: z.string(), owner: z.string(), why: text }),
   z.object({ kind: z.literal("slot-cleared"), ...base, path: z.string() }),
+  // A released copy kept clean for the next lane or task (lanes.reuseCopies, ADR 0018).
+  z.object({ kind: z.literal("slot-free"), ...base, path: z.string() }),
   // Jev (phases 5-6): one recorded decision.
   z.object({
     kind: z.literal("jev"), ...base, point: z.string(), subject: z.string(), mode: z.enum(["shadow", "act"]),

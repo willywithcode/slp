@@ -217,3 +217,73 @@ describe("kept working copies", () => {
     expect((await w.state()).keptSlots.size).toBe(0);
   });
 });
+
+describe("reusing copies (lanes.reuseCopies)", () => {
+  async function reusing(): Promise<World> {
+    const w = await started();
+    const path = join(w.home, "config.json");
+    const config = JSON.parse(await readFile(path, "utf8"));
+    await writeFile(path, JSON.stringify({ ...config, lanes: { home: "auto", setup: null, reuseCopies: true } }));
+    await commitFile(w.repo, ".gitignore", "Library/\n");
+    return w;
+  }
+
+  it("keeps a finished copy with its ignored caches for the next isolated lane; slp clean removes it", async () => {
+    const w = await reusing();
+    await w.as("sup", [...DOCS, "--home", "isolate"]);
+    const first = (await w.state()).lanes.get("L1")!.workdir;
+    await mkdir(join(first, "Library"), { recursive: true });
+    await writeFile(join(first, "Library", "cache.bin"), "warm\n");
+    w.cli.idleAll();
+    await w.as("sup", ["close-lane", "L1", "--drop", "--reason", "x"]);
+    let s = await w.state();
+    expect(s.freeSlots.has(first)).toBe(true);
+    await w.slp(["status"]);
+    expect(w.out.at(-1)).toContain("Copies kept for reuse (1;");
+
+    await w.as("sup", ["open-lane", "--title", "Next", "--outcome", "o", "--accept", "a", "--write", "lib/**", "--home", "isolate"]);
+    s = await w.state();
+    const l2 = s.lanes.get("L2")!;
+    expect(l2.workdir).toBe(first);
+    expect(s.freeSlots.size).toBe(0);
+    expect(sh(first, "branch", "--show-current")).toBe(l2.branch);
+    expect(await readFile(join(first, "Library", "cache.bin"), "utf8")).toBe("warm\n");
+
+    w.cli.idleAll();
+    await w.as("sup", ["close-lane", "L2", "--drop", "--reason", "x"]);
+    await w.slp(["clean"]);
+    expect(existsSync(first)).toBe(false);
+    expect((await w.state()).freeSlots.size).toBe(0);
+  });
+
+  it("a lane's teardown never releases a copy another lane has taken over", async () => {
+    const w = await reusing();
+    await w.as("sup", LANE);
+    w.cli.idleAll();
+    await w.as("L1", ["start-task", "--title", "b", "--goal", "g", "--accept", "x", "--own", "src/b/**", "--parallel"]);
+    const slot = (await w.state()).tasks.get("L1-T1")!.workdir;
+    w.cli.idleAll();
+    await w.as("L1", ["cut", "L1-T1", "not needed"]);
+    expect((await w.state()).freeSlots.has(slot)).toBe(true);
+    await w.as("sup", [...DOCS, "--home", "isolate"]);
+    expect((await w.state()).lanes.get("L2")!.workdir).toBe(slot);
+    w.cli.idleAll();
+    await w.as("sup", ["close-lane", "L1", "--drop", "--reason", "x"]);
+    expect(existsSync(slot)).toBe(true);
+    expect(sh(slot, "branch", "--show-current")).toBe((await w.state()).lanes.get("L2")!.branch);
+  });
+});
+
+describe("slp tell", () => {
+  it("the Human's word to a seat, recorded, with a copy to the Supervisor", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    w.cli.idleAll();
+    await w.slp(["tell", "L1", "use the new API"]);
+    expect((await w.inbox("L1")).at(-1)).toMatch(/from human[\s\S]*use the new API/);
+    expect((await w.inbox("sup")).at(-1)).toMatch(/The Human told L1 directly[\s\S]*use the new API/);
+    expect((await w.state()).letters.some((l) => l.from === "human" && l.to === "L1")).toBe(true);
+    await expect(w.as("sup", ["tell", "L1", "x"])).rejects.toThrow(/the Human's command/);
+    await expect(w.slp(["tell", "L9", "x"])).rejects.toThrow(/No live seat/);
+  });
+});
