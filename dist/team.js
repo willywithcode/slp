@@ -137,9 +137,11 @@ export async function resendIntro(deps, project, state, name) {
         text: intro(name, seat.role, where, seat.agent) });
 }
 export async function closeLane(a, laneId, how) {
+    if (a.state.queued.has(laneId) && how.drop)
+        return dropLane(a.deps, a.project, laneId, how.reason);
     const lane = a.state.lanes.get(laneId);
     if (!lane || !lane.open)
-        throw new SlpError(`No open lane ${laneId}`);
+        throw new SlpError(a.state.queued.has(laneId) ? `Lane ${laneId} is queued; it can only be dropped until it opens.` : `No open lane ${laneId}`);
     if (how.land === how.drop)
         throw new SlpError("Say how: --land, or --drop --reason \"...\"");
     if (how.drop)
@@ -204,13 +206,28 @@ export function render(project, state, now, contextFile) {
     const lanes = [...state.lanes.values()].filter((l) => l.open);
     lines.push("", `Open lanes (${lanes.length}):`);
     for (const l of lanes) {
-        lines.push(`  ${l.id} ${l.title} · ${l.branch}${l.inCheckout ? " (your checkout)" : ` @ ${l.workdir}`}`);
+        lines.push(`  ${l.id} ${l.title} · ${l.branch}${l.home === "onBranch" ? " (your branch, your checkout)" : l.inCheckout ? " (your checkout)" : ` @ ${l.workdir}`}`);
         for (const t of [...state.tasks.values()].filter((x) => x.lane === l.id)) {
             lines.push(`    ${t.id} ${t.state}${t.reworks ? ` (rework ${t.reworks})` : ""}${t.mode === "parallel" ? " parallel" : ""}: ${t.title}`);
         }
         const gate = state.gates.filter((g) => g.lane === l.id).at(-1);
         if (gate)
             lines.push(`    gate ${gate.ok ? "green" : "RED"} ${ago(gate.ts)} ago`);
+    }
+    if (state.queued.size) {
+        lines.push("", "Queued lanes:");
+        for (const q of state.queued.values())
+            lines.push(`  ${q.lane} ${q.input.title} · opens in your checkout after ${q.after}`);
+    }
+    if (state.keptSlots.size) {
+        lines.push("", "Kept working copies (remove with `slp clean` once safe; `slp clean --force` discards their changes):");
+        for (const k of state.keptSlots.values())
+            lines.push(`  ${k.path} (${k.owner}, ${ago(k.since)} ago): ${k.why}`);
+    }
+    if (state.freeSlots.size) {
+        lines.push("", `Copies kept for reuse (${state.freeSlots.size}; \`slp clean\` removes them):`);
+        for (const p of state.freeSlots)
+            lines.push(`  ${p}`);
     }
     const asks = [...state.asks.values()].filter((a) => a.answer === null);
     if (asks.length) {
@@ -232,6 +249,21 @@ export function render(project, state, now, contextFile) {
     }
     lines.push("", `concept: ${contextFile}`);
     return lines.join("\n");
+}
+/** The Human's own word to a seat: recorded, delivered, and copied to the Supervisor. */
+export async function humanTells(deps, project, state, name, body) {
+    const seat = state.seats.get(name);
+    if (!seat?.live)
+        throw new SlpError(`No live seat "${name}" (\`slp status\` lists them).`);
+    if (!body.trim())
+        throw new SlpError('Say something: slp tell <seat> "..."');
+    await sendLetter(deps, project.id, { letter: "MESSAGE", from: "human", to: name, lane: seat.lane, task: seat.task, text: body });
+    const copy = name !== "sup" && state.seats.get("sup")?.live === true;
+    if (copy) {
+        await sendLetter(deps, project.id, { letter: "NOTICE", from: "slp", to: "sup", lane: seat.lane, task: seat.task,
+            text: `The Human told ${name} directly (for your record; nothing to do unless it changes the plan):\n${body}` });
+    }
+    deps.out(`told ${name}${copy ? "; the Supervisor has a copy" : ""}`);
 }
 /** The Supervisor moves a seat whose account ran out to another (ADR 0011). */
 export async function moveSeatVerb(a, config, name, launcher) {

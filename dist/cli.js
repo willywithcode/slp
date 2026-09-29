@@ -13,13 +13,14 @@ import { calibrate } from "./jev/calibrate.js";
 import { projectHere, whoAmI } from "./identity.js";
 import { repoSkills, skillsSection } from "./skills.js";
 import { amendLane, openLane } from "./lanes.js";
+import { cleanSlots } from "./slots.js";
 import { redeliver, watchLockPath } from "./letters.js";
 import { writeAtomic } from "./core/fsutil.js";
 import { permit } from "./permit.js";
 import { mayRun, ROLE_SPECS } from "./roles.js";
 import { answer, ask, findings, message, parseCritique, report } from "./talk.js";
 import { acceptTask, cutTask, diffOf, testOf, finishReview, handBack, parseFinding, reworkTask, startReview, startTask } from "./tasks.js";
-import { closeLane, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
+import { closeLane, humanTells, moveSeatVerb, render, resendIntro, setProject, start, stop } from "./team.js";
 import { update } from "./update.js";
 import { Watcher } from "./watcher.js";
 const USAGE = `slp: a Supervisor, Leads and Peers working on your repository through Herdr
@@ -27,7 +28,9 @@ const USAGE = `slp: a Supervisor, Leads and Peers working on your repository thr
 The Human (in a Herdr pane, inside the repository):
   slp start                 open the Supervisor beside you and a watcher below
   slp status                where the work stands
+  slp tell <seat> TEXT      a word from you to a seat (recorded; the Supervisor gets a copy)
   slp stop [--force]        close every seat
+  slp clean [--force]       remove working copies slp kept (--force: even with uncommitted changes)
   slp intro <seat>          resend a seat's introduction (after a trust dialog)
   slp redeliver <seq> [--force]
   slp watch [--project ID] [--once] [--interval SECONDS]
@@ -40,7 +43,7 @@ Seats run \`slp guide\` for their own verbs. State lives in ~/.slp (SLP_HOME).`;
 const OPTIONS = {
     title: { type: "string" }, outcome: { type: "string" }, accept: { type: "string", multiple: true },
     out: { type: "string", multiple: true }, write: { type: "string", multiple: true }, human: { type: "string" },
-    isolate: { type: "boolean" }, why: { type: "string" }, land: { type: "boolean" }, drop: { type: "boolean" },
+    isolate: { type: "boolean" }, home: { type: "string" }, carry: { type: "boolean" }, after: { type: "string" }, why: { type: "string" }, land: { type: "boolean" }, drop: { type: "boolean" },
     "over-gate": { type: "boolean" }, "over-risk": { type: "boolean" }, reason: { type: "string" }, base: { type: "string" }, gate: { type: "string" },
     "no-gate": { type: "boolean" }, "gate-timeout": { type: "string" }, goal: { type: "string" },
     own: { type: "string", multiple: true }, context: { type: "string" }, preset: { type: "string" },
@@ -52,7 +55,7 @@ const OPTIONS = {
 export class UsageError extends Error {
 }
 /** Commands only the Human runs, never a seat. */
-const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update"]);
+const HUMAN_ONLY = new Set(["start", "stop", "intro", "watch", "calibrate", "update", "clean", "tell"]);
 /** Seat verbs the Human may run too. */
 const HUMAN_TOO = new Set(["incidents", "ack"]);
 /** Verbs only a seat runs; everything else is the Human's. */
@@ -145,6 +148,18 @@ export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
             await redeliver(deps, project.id, me ? me.seat.name : null, seq, values.force === true);
             return 0;
         }
+        case "tell": {
+            arity(1, 2);
+            const { project, state } = await projectHere(deps.env, cwd);
+            await humanTells(deps, project, state, args[0], await text(args[1]));
+            return 0;
+        }
+        case "clean": {
+            arity(0);
+            const { project } = await projectHere(deps.env, cwd);
+            await cleanSlots(deps, project, values.force === true);
+            return 0;
+        }
         case "update":
             arity(0);
             await update(deps, { check: values["dry-run"] === true, version: values.version });
@@ -185,7 +200,7 @@ export async function main(argv, deps, cwd = process.cwd(), stdin = readStdin) {
             const id = values.project ?? deps.env.SLP_PROJECT ?? (await projectHere(deps.env, cwd)).project.id;
             if (!(await loadProject(deps.env, id)))
                 throw new SlpError(`No slp project ${id}`);
-            const interval = values.interval === undefined ? 5 : Number(values.interval);
+            const interval = values.interval === undefined ? (await loadConfig(deps.env)).watch.intervalSeconds : Number(values.interval);
             if (!Number.isFinite(interval) || interval < 1)
                 throw new UsageError("--interval must be at least 1 second");
             return watch(deps, id, interval, values.once === true);
@@ -243,7 +258,7 @@ async function seatVerb(command, args, v, a, text, arity) {
             arity(0);
             await openLane(deps, a.project, await loadConfig(deps.env), {
                 title: v.title ?? "", outcome: v.outcome ?? "", acceptance: list(v.accept), outOfScope: list(v.out),
-                writeSet: list(v.write), humanWords: v.human ?? "", isolate: v.isolate === true,
+                writeSet: list(v.write), humanWords: v.human ?? "", home: homeOf(v), carry: v.carry === true, after: v.after ?? null,
             });
             return 0;
         case "amend-lane":
@@ -409,6 +424,17 @@ async function watch(deps, id, interval, once) {
         await watcher.settle().catch(() => undefined);
         await releaseLock(lock, token).catch(() => undefined);
     }
+}
+const HOMES = ["auto", "newBranch", "onBranch", "isolate"];
+function homeOf(v) {
+    if (v.isolate)
+        return "isolate";
+    if (v.home === undefined)
+        return null;
+    const home = HOMES.find((h) => h.toLowerCase() === v.home.toLowerCase());
+    if (!home)
+        throw new UsageError(`--home is one of ${HOMES.join(", ")}`);
+    return home;
 }
 function positiveInt(raw, name) {
     const n = Number(raw.replace(/^#/, ""));

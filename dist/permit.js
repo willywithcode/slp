@@ -19,6 +19,20 @@ export function permissionPrompt(screen) {
     const excerpt = lines.slice(Math.max(0, start), start + 8).map((l) => l.replace(/[│╭╰─]+/g, "").trim()).filter(Boolean).join("\n");
     return { kind, excerpt: excerpt.slice(0, 600) };
 }
+/**
+ * A Yes/No choice waiting at the bottom of a screen that is not a
+ * permission prompt slp knows (ADR 0020): a numbered menu with a selected
+ * "Yes" and a "No", or a trailing (y/n). Returns its excerpt.
+ */
+export function choicePrompt(screen) {
+    const lines = screen.split(/\r?\n/).filter((l) => l.trim()).slice(-12);
+    const bottom = lines.join("\n");
+    const menu = /^\s*[❯›>]\s*1\.\s*Yes\b/im.test(bottom) && /^\s*[❯›>]?\s*\d\.\s*No\b/im.test(bottom);
+    const yn = /(\(y\/n\)|\[y\/n\])\s*:?\s*$/i.test(lines.at(-1) ?? "");
+    if (!menu && !yn)
+        return null;
+    return lines.slice(-8).map((l) => l.replace(/[│╭╰╮╯─]+/g, "").trim()).filter(Boolean).join("\n").slice(0, 600);
+}
 /** What a seat is being asked to allow, for the notice to whoever answers. */
 export async function pendingPrompt(deps, paneId) {
     const screen = await deps.herdr.agentRead(paneId).catch(() => "");

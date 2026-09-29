@@ -43,7 +43,7 @@ export async function openSeat(deps, project, config, spec) {
         tabId = [...state.seats.values()].find((s) => s.paneId === from)?.tabId ?? project.mainTabId ?? "";
     }
     const shimDir = await writeGitShim(deps.env, spec.role);
-    const settingsPath = choice.launcher.agent === "claude" ? await writeClaudeSettings(deps.env, spec.role) : null;
+    const settingsPath = choice.launcher.agent === "claude" ? await writeClaudeSettings(deps.env, spec.role, config) : null;
     const ready = (pane) => prepare(deps, pane, choice.launcher.env, choice.launcher.prep, shimDir);
     const family = await ready(paneId);
     const sessionId = choice.launcher.agent === "claude" ? randomUUID() : null;
@@ -205,7 +205,7 @@ export async function moveSeat(deps, project, config, seat, move) {
     const paneEnv = { SLP_PROJECT: project.id };
     const paneId = await deps.herdr.paneSplit(seat.paneId, { direction: "down", cwd: move.cwd, env: paneEnv });
     const shimDir = await writeGitShim(deps.env, seat.role);
-    const settingsPath = launcher.agent === "claude" ? await writeClaudeSettings(deps.env, seat.role) : null;
+    const settingsPath = launcher.agent === "claude" ? await writeClaudeSettings(deps.env, seat.role, config) : null;
     const ready = (pane) => prepare(deps, pane, launcher.env, launcher.prep, shimDir);
     const family = await ready(paneId);
     const args = agentArgs(launcher.agent, {

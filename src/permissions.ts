@@ -40,7 +40,8 @@ const SEAT_DENY = [
   "Bash(git branch -f *)", "Bash(git branch -D *)", "Bash(git branch --force *)",
 ];
 
-const WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+// Edit covers every file-editing tool Claude Code has (MultiEdit is gone; a rule for it only warns).
+const WRITE_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
 /** Commands a reading seat may run without asking where it cannot be sandboxed. */
 const READ_AND_TEST = [

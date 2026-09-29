@@ -1,18 +1,69 @@
 import { join } from "node:path";
+import { loadConfig } from "./core/config.js";
 import { SlpError } from "./core/errors.js";
-import { append, nextId, readLedger } from "./core/ledger.js";
-import { projectDir } from "./core/paths.js";
+import { append, readLedger } from "./core/ledger.js";
+import { configPath, projectDir } from "./core/paths.js";
 import { contextPath } from "./core/project.js";
 import { readFile } from "node:fs/promises";
 import { criticPrefilter } from "./jev/desk.js";
-import { addWorktree, currentBranch, dirtyPaths, git, gitOk, head, removeWorktree } from "./git.js";
-import { isCatchAll, overlaps } from "./globs.js";
+import { currentBranch, dirtyPaths, git, gitOk, head, statusLines } from "./git.js";
+import { prepareCopy, submoduleWarning } from "./prepare.js";
+import { makeCopy, pickSlot, releaseCopy } from "./slots.js";
+import { isCatchAll, matches, overlaps } from "./globs.js";
 import { intro } from "./guide.js";
 import { describe, sendLetter } from "./letters.js";
 import { closeSeat, openSeat } from "./seats.js";
 import { humanWordsSince } from "./watch/transcripts.js";
 import { laneRisky } from "./risk.js";
 import { fold, liveSeats } from "./state.js";
+const MAX_SHOWN = 8;
+function shown(changes) {
+    return changes.slice(0, MAX_SHOWN).map((c) => `  ${c}`).join("\n") + (changes.length > MAX_SHOWN ? `\n  … and ${changes.length - MAX_SHOWN} more` : "");
+}
+/**
+ * Where a lane works (ADR 0018). slp never makes a copy of the repository
+ * unless asked (isolate); when the checkout cannot take the lane, it says
+ * why and what the choices are, for the Supervisor to settle with the Human.
+ */
+export function placeLane(asked, c, base, carry) {
+    if (asked === "isolate")
+        return { home: "isolate" };
+    if (c.busyWith) {
+        return {
+            short: `your checkout is in use by lane ${c.busyWith}`,
+            refused: `Your checkout is in use by lane ${c.busyWith}. Choose:\n` +
+                `  --after ${c.busyWith}     wait: slp opens this lane in the checkout once ${c.busyWith} closes\n` +
+                "  --home isolate   a separate working copy (a full checkout of the repository under ~/.slp) now",
+        };
+    }
+    if (asked === "onBranch") {
+        if (!c.branch)
+            return { short: "your checkout is not on a branch", refused: "Your checkout is not on a branch (detached HEAD); onBranch needs one. Ask the Human to switch to a branch." };
+        return { home: "onBranch" };
+    }
+    if (c.changes.length && !carry) {
+        return {
+            short: `your checkout has uncommitted changes (${c.changes[0]}${c.changes.length > 1 ? `, +${c.changes.length - 1}` : ""})`,
+            refused: `Your checkout has uncommitted changes to ${c.changes.length} tracked file(s):\n${shown(c.changes)}\n` +
+                "slp does not start a lane over them, nor copy the repository without being asked. Choose, with the Human:\n" +
+                `  --home onBranch          work on ${c.branch ?? "the current branch"} as it is: the changes stay, the lane commits onto it; landing moves no branch\n` +
+                "  --home newBranch --carry a lane branch here that takes the changes over: they land with the lane\n" +
+                "  commit or stash them     (the Human), then open the lane again\n" +
+                "  --home isolate           a separate working copy (a full checkout under ~/.slp); the changes stay where they are",
+        };
+    }
+    if (asked === "auto" && c.branch !== base) {
+        return {
+            short: `your checkout is on ${c.branch ?? "a detached HEAD"}, not ${base}`,
+            refused: `Your checkout is on ${c.branch ?? "a detached HEAD"}, not the base ${base}. Choose, with the Human:\n` +
+                (c.branch ? `  --home onBranch    work on ${c.branch} itself; landing moves no branch\n` : "") +
+                `  --home newBranch   switch the checkout to a new lane branch from ${base}\n` +
+                `  set the base       \`slp set-project --base ${c.branch ?? "<branch>"}\`, then open the lane again\n` +
+                "  --home isolate     a separate working copy (a full checkout under ~/.slp)",
+        };
+    }
+    return { home: "newBranch" };
+}
 function slug(title) {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32).replace(/^-+|-+$/g, "") || "lane";
 }
@@ -46,63 +97,123 @@ function directive(lane) {
         "The Human's concept (read-only for you): `slp context`",
         ...(lane.humanWords ? ["", "The Human asked:", lane.humanWords] : []),
     ];
+    if (lane.home === "onBranch") {
+        lines.push("", `You work on the Human's own branch ${lane.branch}, in their checkout, which may hold their uncommitted changes. ` +
+            "Peers commit only paths in the write set (`git add <path>`, never `git add -A` or `git add .`). " +
+            `Landing moves no branch: the lane's commits are already on ${lane.branch}; slp runs the gate and checks holds.`);
+    }
+    if (lane.carried.length) {
+        lines.push("", "The Human's uncommitted changes were carried into this lane and land with it; have a Peer commit them with the lane's work:", ...lane.carried.map((c) => `  ${c}`));
+    }
     const risky = laneRisky(lane);
     if (risky)
         lines.push("", `High-risk lane (${risky}): get a review of the whole lane (\`slp start-review --lane\`) before reporting ready; slp holds the landing until then.`);
     return lines.join("\n");
 }
-export async function openLane(deps, project, config, input) {
+/** Lane ids count lanes opened and lanes queued, so a queued lane keeps its id. */
+function nextLaneId(events) {
+    return `L${new Set(events.flatMap((e) => (e.kind === "lane-open" || e.kind === "lane-queued" ? [e.lane] : []))).size + 1}`;
+}
+export async function openLane(deps, project, config, input, queuedAs) {
     if (!input.title.trim() || !input.outcome.trim())
         throw new SlpError("A lane needs --title and --outcome.");
     if (!input.acceptance.length)
         throw new SlpError("A lane needs acceptance: --accept \"...\" (repeatable).");
     const before = fold(await readLedger(deps.env, project.id));
-    const base = before.settings.base;
-    const baseCommit = await head(project.root, base);
     // The Human's own words since the last lane (from the Supervisor's
     // transcript), else what the Supervisor quoted.
     const sup = before.seats.get("sup");
     const since = [...before.lanes.values()].at(-1)?.openedAt ?? sup?.openedAt ?? new Date(0).toISOString();
-    const typed = sup?.sessionId ? await humanWordsSince(deps.env, sup.sessionId, since).catch(() => []) : [];
+    const typed = queuedAs || !sup?.sessionId ? [] : await humanWordsSince(deps.env, sup.sessionId, since).catch(() => []);
     const humanWords = typed.length ? typed.join("\n\n") : input.humanWords;
-    const onBase = (await currentBranch(project.root)) === base;
-    const clean = (await dirtyPaths(project.root)).length === 0;
+    if (!queuedAs)
+        checkWriteSet(before, input.writeSet, input.after ?? undefined);
+    if (input.after && !queuedAs) {
+        const after = input.after;
+        const queued = await append(deps.env, project.id, (events) => {
+            const state = fold(events);
+            if (!state.lanes.get(after)?.open && !state.queued.has(after))
+                throw new SlpError(`No open or queued lane ${after} to wait for.`);
+            checkWriteSet(state, input.writeSet, after);
+            return {
+                kind: "lane-queued", lane: nextLaneId(events), after,
+                input: {
+                    title: input.title, outcome: input.outcome, acceptance: input.acceptance, outOfScope: input.outOfScope,
+                    writeSet: input.writeSet, humanWords, ...(input.home ? { home: input.home } : {}), ...(input.carry ? { carry: true } : {}),
+                },
+            };
+        });
+        deps.out(`lane ${queued.lane} queued: it opens in your checkout once ${after} closes (\`slp status\` shows it; drop it with \`slp close-lane ${queued.lane} --drop --reason "..."\`)`);
+        return null;
+    }
+    const base = before.settings.base;
+    const baseCommit = await head(project.root, base);
+    const checkout = {
+        branch: await currentBranch(project.root),
+        changes: await statusLines(project.root, false),
+        busyWith: [...before.lanes.values()].find((l) => l.open && l.inCheckout)?.id ?? null,
+    };
+    const asked = input.home ?? config.lanes.home;
+    const placed = placeLane(asked, checkout, base, input.carry);
+    if ("refused" in placed) {
+        await deps.herdr.notify(`slp: a lane waits on your choice`, `"${input.title}": ${placed.short}. The Supervisor has the options.`).catch(() => undefined);
+        throw new SlpError(`Lane "${input.title}" not opened.\n${placed.refused}\nThe default is \`lanes.home\` in ${configPath(deps.env)}.`);
+    }
+    const home = placed.home;
+    const inCheckout = home !== "isolate";
+    const branchHere = home === "onBranch" ? checkout.branch : null;
+    const hereCommit = branchHere ? await head(project.root, "HEAD") : null;
     const slots = join(projectDir(deps.env, project.id), "slots");
+    let slot = { path: project.root, reused: false };
     // The lane is reserved under the ledger lock (its id, write set and working
     // copy are decided against the current record), then its branch is made.
-    // The first lane works in the Human's checkout; later or isolated lanes get
-    // a worktree of their own (ADR 0008).
     const opened = await append(deps.env, project.id, (events) => {
         const state = fold(events);
-        checkWriteSet(state, input.writeSet);
-        const id = nextId(events, "lane-open", "L");
-        const checkoutBusy = [...state.lanes.values()].some((l) => l.open && l.inCheckout);
-        const inCheckout = !input.isolate && !checkoutBusy && onBase && clean;
+        if (queuedAs && !state.queued.has(queuedAs))
+            throw new SlpError(`Lane ${queuedAs} is no longer queued.`);
+        const waitedFor = queuedAs ? state.queued.get(queuedAs).after : undefined;
+        checkWriteSet(state, input.writeSet, waitedFor);
+        if (inCheckout && [...state.lanes.values()].some((l) => l.open && l.inCheckout))
+            throw new SlpError("Another lane took your checkout meanwhile; open this one again.");
+        const id = queuedAs ?? nextLaneId(events);
+        if (!inCheckout)
+            slot = pickSlot(state, config, join(slots, id));
         return {
             kind: "lane-open", lane: id, title: input.title, outcome: input.outcome, acceptance: input.acceptance,
-            outOfScope: input.outOfScope, writeSet: input.writeSet, branch: `lane/${id}-${slug(input.title)}`,
-            workdir: inCheckout ? project.root : join(slots, id), inCheckout, base, baseCommit, humanWords,
+            outOfScope: input.outOfScope, writeSet: input.writeSet, branch: branchHere ?? `lane/${id}-${slug(input.title)}`,
+            workdir: inCheckout ? project.root : slot.path, inCheckout, home,
+            base: branchHere ?? base, baseCommit: hereCommit ?? baseCommit, humanWords,
+            ...(home === "newBranch" && checkout.changes.length ? { carried: checkout.changes } : {}),
         };
     });
-    const { lane: id, branch, workdir, inCheckout } = opened;
+    const { lane: id, branch, workdir } = opened;
     try {
-        if (inCheckout)
+        if (home === "newBranch")
             await gitOk(project.root, ["checkout", "-b", branch, baseCommit]);
-        else
-            await addWorktree(project.root, workdir, branch, baseCommit);
+        else if (home === "isolate")
+            await makeCopy(project.root, slot, branch, baseCommit);
     }
     catch (error) {
         await append(deps.env, project.id, () => ({
             kind: "lane-close", lane: id, landed: false, reason: `its branch could not be made: ${describe(error)}`, commit: null, overGate: false,
         }));
+        if (slot.reused)
+            await releaseCopy(deps, project, workdir, id).catch(() => undefined);
         throw error;
     }
     const lane = fold(await readLedger(deps.env, project.id)).lanes.get(id);
-    deps.out(`lane ${id} opened on ${branch} (${inCheckout ? "your checkout" : workdir})`);
+    deps.out(`lane ${id} opened ${home === "onBranch" ? `on your branch ${branch}` : `on ${branch}`} (${inCheckout ? "your checkout" : workdir})`);
+    // A new copy is made ready before its Lead starts (ADR 0019); the Lead hears how it went.
+    const notes = home === "isolate" ? await prepareCopy(project.root, workdir, config, before.settings.gateTimeoutMinutes * 60_000) : [];
+    const sub = await submoduleWarning(project.root, input.writeSet);
+    if (sub)
+        notes.push(sub);
+    for (const note of notes)
+        deps.out(note);
     const lead = await openSeat(deps, project, config, {
         name: id, role: "lead", lane: id, task: null, cwd: workdir, place: { kind: "tab", label: `${id} ${input.title}`.slice(0, 40) },
         intro: intro(id, "lead", ` (lane ${id}: ${input.title})`, config.launchers[config.roles.lead.use[0]]?.agent ?? "claude"),
-        brief: { letter: "DIRECTIVE", from: "sup", text: directive(lane) },
+        brief: { letter: "DIRECTIVE", from: "sup", text: [directive(lane), ...notes].join("\n\n") },
     });
     if (lead.attention)
         deps.out(`NEEDS ATTENTION: ${lead.attention}`);
@@ -146,6 +257,9 @@ export async function amendLane(deps, project, laneId, a) {
         throw new SlpError("Say why: --why \"...\"");
     if (a.writeSet)
         checkWriteSet(state, a.writeSet, laneId);
+    const sub = a.writeSet ? await submoduleWarning(project.root, a.writeSet) : null;
+    if (sub)
+        deps.out(sub);
     await append(deps.env, project.id, () => ({
         kind: "lane-amend", lane: laneId, why: a.why,
         ...(a.outcome !== undefined ? { outcome: a.outcome } : {}),
@@ -174,8 +288,9 @@ export async function teardownLane(deps, project, lane, state) {
     for (const task of state.tasks.values()) {
         if (task.lane !== lane.id || task.mode !== "parallel")
             continue;
-        if (!(await removeWorktree(project.root, task.workdir))) {
-            problems.push(`${task.id}'s worktree has uncommitted changes and was kept: ${task.workdir}`);
+        const why = await releaseCopy(deps, project, task.workdir, task.id);
+        if (why) {
+            problems.push(`${task.id}'s working copy was kept (${why}): ${task.workdir}; slp clean removes it once it is safe`);
             continue;
         }
         // A task branch with no commits of its own holds nothing worth keeping.
@@ -191,15 +306,33 @@ export async function teardownLane(deps, project, lane, state) {
                 problems.push(`your checkout is still on ${lane.branch}; switch it back with \`git checkout ${lane.base}\` (${r.stderr.trim()})`);
         }
     }
-    else if (!(await removeWorktree(project.root, lane.workdir))) {
-        problems.push(`${lane.id}'s worktree has uncommitted changes and was kept: ${lane.workdir}`);
+    else {
+        const why = await releaseCopy(deps, project, lane.workdir, lane.id);
+        if (why)
+            problems.push(`${lane.id}'s working copy was kept (${why}): ${lane.workdir}; slp clean removes it once it is safe`);
     }
     return problems;
+}
+/**
+ * Uncommitted work in a lane's own working copy. In the Human's checkout,
+ * untracked files count only inside the write set (the Human's own files and
+ * their tools' caches are not the lane's); on the Human's branch (onBranch),
+ * tracked changes do too.
+ */
+export async function laneChanges(lane) {
+    const lines = await statusLines(lane.workdir);
+    const path = (line) => line.slice(3).split(" -> ").at(-1).replace(/^"|"$/g, "");
+    if (!lane.inCheckout)
+        return lines.map(path);
+    return lines.filter((l) => matches(lane.writeSet, path(l)) || (!l.startsWith("??") && lane.home !== "onBranch")).map(path);
 }
 /** Uncommitted work anywhere in a lane: its copy and its parallel tasks' copies. */
 export async function laneDirt(state, lane) {
     const found = [];
-    const copies = [lane.workdir, ...[...state.tasks.values()].filter((t) => t.lane === lane.id && t.mode === "parallel" && ["running", "handed-back", "rework"].includes(t.state)).map((t) => t.workdir)];
+    const own = await laneChanges(lane).catch(() => []);
+    if (own.length)
+        found.push(`${lane.workdir}: ${own.slice(0, 6).join(", ")}`);
+    const copies = [...state.tasks.values()].filter((t) => t.lane === lane.id && t.mode === "parallel" && ["running", "handed-back", "rework"].includes(t.state)).map((t) => t.workdir);
     for (const dir of copies) {
         const dirty = await dirtyPaths(dir).catch(() => []);
         if (dirty.length)
@@ -207,14 +340,19 @@ export async function laneDirt(state, lane) {
     }
     return found;
 }
-/** Drop a lane without landing: seats closed, its branch kept for the record. */
+/** Drop a lane without landing: seats closed, its branch kept for the record. A queued lane is taken off the queue. */
 export async function dropLane(deps, project, laneId, reason) {
     const state = fold(await readLedger(deps.env, project.id));
+    if (!reason.trim())
+        throw new SlpError("Say why: --reason \"...\"");
+    if (state.queued.has(laneId)) {
+        await append(deps.env, project.id, () => ({ kind: "lane-unqueued", lane: laneId, reason }));
+        deps.out(`lane ${laneId} taken off the queue`);
+        return;
+    }
     const lane = state.lanes.get(laneId);
     if (!lane || !lane.open)
         throw new SlpError(`No open lane ${laneId}`);
-    if (!reason.trim())
-        throw new SlpError("Say why: --reason \"...\"");
     const dirt = await laneDirt(state, lane);
     if (dirt.length) {
         throw new SlpError(`Lane ${laneId} has uncommitted work (${dirt.join("; ")}). Have its Lead get it committed or discarded, then drop it.`);
@@ -223,4 +361,35 @@ export async function dropLane(deps, project, laneId, reason) {
     await append(deps.env, project.id, () => ({ kind: "lane-close", lane: laneId, landed: false, reason, commit: null, overGate: false }));
     const problems = await teardownLane(deps, project, lane, state);
     deps.out(`lane ${laneId} dropped; branch ${lane.branch} kept${problems.length ? `\n${problems.join("\n")}` : ""}`);
+}
+/** A queued lane's turn came (ADR 0018): open it, or say why it cannot and take it off the queue. */
+export async function openQueued(deps, project, queued) {
+    const state = fold(await readLedger(deps.env, project.id));
+    const to = state.seats.get("sup")?.live ? "sup" : "human";
+    try {
+        const config = await loadConfig(deps.env);
+        const lane = await openLane(deps, project, config, {
+            ...queued.input, home: queued.input.home ?? null, carry: queued.input.carry === true, after: null,
+        }, queued.lane);
+        await sendLetter(deps, project.id, { letter: "NOTICE", from: "slp", to, lane: queued.lane,
+            text: `${queued.lane} (${queued.input.title}) opened, now that ${queued.after} is closed: ${lane?.inCheckout ? "in your checkout" : lane?.workdir}.` });
+    }
+    catch (error) {
+        const why = describe(error);
+        await append(deps.env, project.id, () => ({ kind: "lane-unqueued", lane: queued.lane, reason: why }));
+        await deps.herdr.notify(`slp: ${queued.lane} could not open`, why.split("\n")[0]).catch(() => undefined);
+        await sendLetter(deps, project.id, { letter: "NOTICE", from: "slp", to, lane: queued.lane,
+            text: `${queued.lane} (${queued.input.title}) was waiting for ${queued.after} and could not open; it is off the queue:\n${why}\nOpen it again once settled.` })
+            .catch(() => undefined);
+    }
+}
+/** The first queued lane whose wait is over: the lane it waited for is closed and its seats are gone. */
+export function queuedReady(state) {
+    for (const q of state.queued.values()) {
+        const after = state.lanes.get(q.after);
+        if (after ? after.open || liveSeats(state).some((s) => s.lane === after.id) : state.queued.has(q.after))
+            continue;
+        return q;
+    }
+    return null;
 }

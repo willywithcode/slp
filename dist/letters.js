@@ -40,7 +40,7 @@ export function envelope(l, body) {
  * letter's Enter would pick the highlighted answer. Matched on the bottom of
  * the screen only, so a conversation that mentions trust does not hold mail.
  */
-const STARTUP_DIALOG = /Trust this folder\?|Trust and continue|Yes, I trust this folder|a project you created or one you trust|Do you trust the (?:files|contents)/i;
+const STARTUP_DIALOG = /Trust this folder\?|Trust and continue|Yes, I trust this folder|a project you created or one you trust|Do you trust the (?:files|contents)|Bypass Permissions mode|Yes, I accept/i;
 /** Whether a screen's bottom shows a startup dialog. */
 export function showsStartupDialog(screen) {
     return STARTUP_DIALOG.test(screen.split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n"));

@@ -2,7 +2,9 @@ import { join } from "node:path";
 import { SlpError } from "./core/errors.js";
 import { append, readLedger } from "./core/ledger.js";
 import { projectDir } from "./core/paths.js";
-import { addWorktree, changedFiles, commonDir, dirtyPaths, git, head, mergeInto, removeWorktree } from "./git.js";
+import { changedFiles, commonDir, dirtyPaths, git, head, mergeInto } from "./git.js";
+import { prepareCopy } from "./prepare.js";
+import { makeCopy, pickSlot, releaseCopy } from "./slots.js";
 import { detectGate, runGate } from "./gate.js";
 import { matches, overlaps } from "./globs.js";
 import { changedLines } from "./risk.js";
@@ -71,6 +73,7 @@ export async function startTask(a, config, input) {
     // Reserved under the ledger lock: id, overlap and the one-writer rule are
     // checked against the record as it is now (a Lead may run commands in
     // parallel), then the task's copy is made.
+    let slot = { path: lane.workdir, reused: false };
     const started = await append(deps.env, project.id, (events) => {
         const tasks = [...fold(events).tasks.values()].filter((t) => t.lane === lane.id);
         const active = tasks.filter((t) => ACTIVE.has(t.state));
@@ -83,19 +86,24 @@ export async function startTask(a, config, input) {
                 "Wait, or start this task with --parallel (its own copy).");
         }
         const id = `${lane.id}-T${tasks.length + 1}`;
+        slot = input.parallel ? pickSlot(fold(events), config, join(slots, id)) : { path: lane.workdir, reused: false };
         return {
             kind: "task-start", lane: lane.id, task: id, title: input.title, goal: input.goal, acceptance: input.acceptance,
             owned: input.owned, outOfScope: input.outOfScope, context: input.context, mode: input.parallel ? "parallel" : "lane",
             branch: input.parallel ? `task/${id}-${slug(input.title)}` : lane.branch,
-            workdir: input.parallel ? join(slots, id) : lane.workdir, baseCommit: laneHead, seat: id,
+            workdir: slot.path, baseCommit: laneHead, seat: id,
         };
     });
     const { task: id, branch, workdir } = started;
     const draft = { id, title: input.title, goal: input.goal, acceptance: input.acceptance, owned: input.owned,
         outOfScope: input.outOfScope, context: input.context, branch, workdir, skills };
     try {
-        if (input.parallel)
-            await addWorktree(project.root, workdir, branch, laneHead);
+        if (input.parallel) {
+            await makeCopy(project.root, slot, branch, laneHead);
+            // Made ready before its Peer starts (ADR 0019); the Lead reads how it went here.
+            for (const note of await prepareCopy(project.root, workdir, config, a.state.settings.gateTimeoutMinutes * 60_000))
+                deps.out(note);
+        }
         const opened = await openSeat(deps, project, config, {
             name: id, role: "peer", lane: lane.id, task: id, cwd: workdir, preset: input.preset,
             place: { kind: "split", from: a.seat.paneId, direction: "right" },
@@ -108,7 +116,7 @@ export async function startTask(a, config, input) {
     }
     catch (error) {
         await append(deps.env, project.id, () => ({ kind: "task-cut", task: id, reason: `it could not start: ${describe(error)}` }));
-        if (input.parallel && await removeWorktree(project.root, workdir))
+        if (input.parallel && !(await releaseCopy(deps, project, workdir, id)))
             await git(project.root, ["branch", "-D", branch]);
         throw error;
     }
@@ -194,10 +202,11 @@ export async function acceptTask(a, id, note) {
     await finishSeat(a, task, `task ${id} accepted`);
     let kept = "";
     if (task.mode === "parallel") {
-        if (await removeWorktree(project.root, task.workdir))
+        const why = await releaseCopy(deps, project, task.workdir, id);
+        if (!why)
             await git(project.root, ["branch", "-D", task.branch]);
         else
-            kept = `; its worktree changed since and was kept: ${task.workdir}`;
+            kept = `; its working copy was kept (${why}): ${task.workdir}`;
     }
     deps.out(`${id} accepted${merged ? ` and merged into ${lane.branch}` : ""}${kept}`);
 }
@@ -221,9 +230,9 @@ export async function cutTask(a, id, reason) {
     await append(a.deps.env, a.project.id, () => ({ kind: "task-cut", task: id, reason }));
     await finishSeat(a, task, `task ${id} cut`);
     if (task.mode === "parallel") {
-        const removed = await removeWorktree(a.project.root, task.workdir);
+        const why = await releaseCopy(a.deps, a.project, task.workdir, id);
         a.deps.out(`${id} cut; its branch ${task.branch} is kept` +
-            (removed ? "" : `, and so is its worktree, which has uncommitted changes: ${task.workdir}`));
+            (why ? `, and so is its working copy (${why}): ${task.workdir}` : ""));
         return;
     }
     const dirty = await dirtyPaths(task.workdir);
@@ -316,7 +325,7 @@ export async function diffOf(a, target) {
     let range;
     if (target === lane.id) {
         cwd = lane.workdir;
-        range = `${lane.base}...${lane.branch}`;
+        range = lane.home === "onBranch" ? `${lane.baseCommit}..${lane.branch}` : `${lane.base}...${lane.branch}`;
     }
     else {
         const task = a.state.tasks.get(target);
