@@ -26,12 +26,15 @@ export async function laneReviewed(root, state, lane, upTo) {
         if ((await git(root, ["merge-base", "--is-ancestor", r.head, upTo])).code !== 0)
             continue;
         const since = (await git(root, ["rev-list", "--first-parent", `${r.head}..${upTo}`])).stdout.split("\n").filter(Boolean);
-        let covered = true;
-        for (const commit of since)
-            if (!(await pureBaseMerge(root, lane.base, commit))) {
-                covered = false;
-                break;
-            }
+        // On the Human's own branch (ADR 0018) the "base" is that branch itself, so
+        // any merge would pass as a base merge: every later commit needs review.
+        let covered = lane.home !== "onBranch";
+        if (covered)
+            for (const commit of since)
+                if (!(await pureBaseMerge(root, lane.base, commit))) {
+                    covered = false;
+                    break;
+                }
         if (covered)
             return true;
     }

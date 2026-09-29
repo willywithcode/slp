@@ -124,7 +124,7 @@ export class Watcher {
         if (!next)
             return;
         this.deps.out(`opening ${next.lane}: ${next.after} has closed`);
-        this.inflight = openQueued(this.deps, project, next)
+        this.inflight = openQueued(this.deps, project, next, this.now())
             .catch((error) => this.deps.out(`${next.lane} could not open: ${describe(error)}`))
             .finally(() => { this.inflight = null; });
     }
