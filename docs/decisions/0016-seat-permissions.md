@@ -4,7 +4,7 @@ Date: 2026-09-27
 
 ## Status
 
-Accepted. Refines ADR 0004 (agents get permission for slp only) and ADR 0014
+Accepted; Claude seats on Windows amended by ADR 0020 (they no longer ask by default). Refines ADR 0004 (agents get permission for slp only) and ADR 0014
 (dialogs are the Human's: startup dialogs stay so).
 
 ## Context

@@ -196,11 +196,27 @@ can set up its sandbox (until then its Peers' commands fail).
 
 As in seatworks (ADR 0016): each role has what it must never do refused
 outright (no push, pull, checkout or forced branch moves; no other agents'
-logins, `~/.secrets` or git config; readers write and commit nothing), by
-Claude Code settings per role and a `git` shim on every seat's PATH. Codex
-seats never ask inside their sandbox. Claude seats run without asking inside
-Claude Code's sandbox on macOS and Linux; on Windows, where it does not exist
-yet, they ask, with read-only git and test commands allowed.
+logins, `~/.secrets` or git config; readers and Leads write no files), by
+Claude Code settings per role and a `git` shim on every seat's PATH.
+
+Everything else runs without asking (ADR 0020, `"permissions": { "mode":
+"auto" }`, the default): Claude seats in bypass mode, held by those rules
+(and Claude Code's sandbox on macOS and Linux); Codex seats never ask inside
+their sandbox. You are asked about the work (ideas, design, technology), not
+for leave to edit files. `"mode": "ask"` brings Claude Code's prompts back.
+
+Allow more per role, for `ask` mode or tools you want pre-approved:
+
+```json
+"roles": { "lead": { "use": ["claude"], "allow": ["Bash(dotnet build*)"] } }
+```
+
+slp's deny rules still win. A prompt that does appear: a permission prompt
+goes to the Supervisor after 20 s (`watch.permitAfterMs`) while you are out
+of the loop; the Supervisor's own prompts, and all of them with
+`"human": { "inLoop": true }`, notify you at once; a Yes/No slp does not
+recognise is reported to you after 20 s; anything else after 3 minutes
+(`watch.blockedMs`). The watcher looks every `watch.intervalSeconds` (5).
 
 ## Repository skills
 

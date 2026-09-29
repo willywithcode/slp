@@ -302,6 +302,6 @@ describe("watcher rules", () => {
     await watcher.tick();
     await watcher.tick();
     expect(w.cli.notifications.filter((n) => n.title.includes("L1 waits on you"))).toHaveLength(1);
-    expect((await w.inbox("sup")).at(-1)).toMatch(/L1 has waited on a prompt/);
+    expect((await w.inbox("sup")).at(-1)).toContain("L1 waits on a prompt in its pane (3 min); the Human was notified");
   });
 });

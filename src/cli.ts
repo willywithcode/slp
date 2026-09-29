@@ -182,7 +182,7 @@ export async function main(argv: string[], deps: Deps, cwd: string = process.cwd
       arity(0);
       const id = values.project ?? deps.env.SLP_PROJECT ?? (await projectHere(deps.env, cwd)).project.id;
       if (!(await loadProject(deps.env, id))) throw new SlpError(`No slp project ${id}`);
-      const interval = values.interval === undefined ? 5 : Number(values.interval);
+      const interval = values.interval === undefined ? (await loadConfig(deps.env)).watch.intervalSeconds : Number(values.interval);
       if (!Number.isFinite(interval) || interval < 1) throw new UsageError("--interval must be at least 1 second");
       return watch(deps, id, interval, values.once === true);
     }

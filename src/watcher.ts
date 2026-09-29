@@ -3,11 +3,11 @@ import { GoneError } from "./core/errors.js";
 import { append, readLedger, type SlpEvent } from "./core/ledger.js";
 import { loadProject, type Project } from "./core/project.js";
 import { loadConfig, type Config } from "./core/config.js";
-import { pendingPrompt } from "./permit.js";
+import { choicePrompt, permissionPrompt } from "./permit.js";
 import { pendingRequests, runRequest } from "./land.js";
 import { openQueued, queuedReady, teardownLane } from "./lanes.js";
 import { sweepKept } from "./slots.js";
-import { describe, pump, sendLetter } from "./letters.js";
+import { describe, pump, sendLetter, showsStartupDialog } from "./letters.js";
 import { closeSeat } from "./seats.js";
 import { fold, liveSeats, superiorOf, type Seat, type State } from "./state.js";
 import { JevDesk } from "./jev/desk.js";
@@ -18,7 +18,7 @@ import { Observer } from "./watch/observer.js";
 // Phase 4 adds transcript facts and incidents; Jev (ADR 0013) is optional.
 
 export const watchTiming = {
-  /** A seat stuck on a prompt in its pane this long is reported. */
+  /** Defaults for the config's watch timings (ADR 0020). A seat stuck on a prompt in its pane this long is reported. */
   blockedMs: 3 * 60_000,
   /** An unanswered ask is reminded after this long, then as often again. */
   askReminderMs: 10 * 60_000,
@@ -31,11 +31,16 @@ export const watchTiming = {
   sweepMs: 10 * 60_000,
 };
 
+/** An idle seat's screen is read for a prompt at most this often. */
+const PEEK_MS = 10_000;
+
 export class Watcher {
   private inflight: Promise<void> | null = null;
   private readonly blockedSince = new Map<string, number>();
   private readonly blockedTold = new Set<string>();
   private readonly missing = new Map<string, number>();
+  /** When an idle seat's screen was last read for a prompt. */
+  private readonly peeked = new Map<string, number>();
   /** Seats whose mail waits behind a startup dialog, already reported to the Human. */
   private readonly dialogTold = new Set<string>();
   private readonly observer: Observer;
@@ -148,8 +153,10 @@ export class Watcher {
       .catch((error: unknown) => this.deps.out(`could not tell ${target}: ${describe(error)}`));
   }
 
-  /** Seats whose pane is gone, or stuck on a prompt only the Human can answer. */
+  /** Seats whose pane is gone, or that wait on a prompt: each goes to whoever answers it (ADR 0016, 0020). */
   private async checkPanes(project: Project, state: State, status: Map<string, string>, config: Config | null): Promise<void> {
+    const permitAfter = config?.watch.permitAfterMs ?? watchTiming.permitAfterMs;
+    const blockedAfter = config?.watch.blockedMs ?? watchTiming.blockedMs;
     for (const seat of liveSeats(state)) {
       const s = status.get(seat.paneId);
       if (s === undefined) {
@@ -164,32 +171,62 @@ export class Watcher {
         continue;
       }
       this.missing.delete(seat.name);
-      if (s === "blocked") {
-        const since = this.blockedSince.get(seat.name) ?? this.now();
-        this.blockedSince.set(seat.name, since);
-        if (this.blockedTold.has(seat.name)) continue;
-        // A permission prompt goes to the Supervisor while the Human is out of the loop (ADR 0016);
-        // anything else, and the Supervisor's own prompts, to the Human.
-        const prompt = await pendingPrompt(this.deps, seat.paneId);
-        const toSup = prompt !== null && config !== null && !config.human.inLoop && seat.name !== "sup" && state.seats.get("sup")?.live === true;
-        if (this.now() - since < (toSup ? watchTiming.permitAfterMs : watchTiming.blockedMs)) continue;
-        this.blockedTold.add(seat.name);
-        if (toSup) {
-          await this.tell(project, state, "sup", `${seat.name} asks permission for:\n${prompt}\n\n` +
-            `Answer it for the Human: \`slp permit ${seat.name} allow "why"\` or \`slp permit ${seat.name} deny "why"\`.`, seat.lane);
-          continue;
-        }
-        await this.deps.herdr.notify(`slp: ${seat.name} waits on you`, prompt ?? `A prompt in pane ${seat.paneId} needs the Human.`).catch(() => undefined);
-        const up = superiorOf(state, seat);
-        if (up) {
-          await this.tell(project, state, up,
-            `${seat.name} has waited on a prompt in its pane for ${Math.round((this.now() - since) / 60_000)} min; the Human was notified.`, seat.lane);
-        }
-      } else {
+      const waiting = await this.promptOf(seat, s);
+      if (!waiting) {
         this.blockedSince.delete(seat.name);
         this.blockedTold.delete(seat.name);
+        continue;
+      }
+      const since = this.blockedSince.get(seat.name) ?? this.now();
+      this.blockedSince.set(seat.name, since);
+      if (this.blockedTold.has(seat.name)) continue;
+      // A permission prompt goes to the Supervisor while the Human is out of
+      // the loop, after a moment (it may clear by itself). The Human's own
+      // (the Supervisor's prompts, or every one with the Human in the loop)
+      // reach them at once; a Yes/No slp does not recognise after that
+      // moment; any other prompt after blockedMs.
+      const toSup = waiting.kind === "permission" && config !== null && !config.human.inLoop &&
+        seat.name !== "sup" && state.seats.get("sup")?.live === true;
+      const wait = toSup || waiting.kind === "choice" ? permitAfter : waiting.kind === "permission" ? 0 : blockedAfter;
+      if (this.now() - since < wait) continue;
+      this.blockedTold.add(seat.name);
+      if (toSup) {
+        await this.tell(project, state, "sup", `${seat.name} asks permission for:\n${waiting.text}\n\n` +
+          `Answer it for the Human: \`slp permit ${seat.name} allow "why"\` or \`slp permit ${seat.name} deny "why"\`.`, seat.lane);
+        continue;
+      }
+      const what = waiting.kind === "choice" ? `A prompt slp does not recognise waits in its pane:\n${waiting.text}`
+        : waiting.text ?? `A prompt in pane ${seat.paneId} needs the Human.`;
+      await this.deps.herdr.notify(`slp: ${seat.name} waits on you`, what).catch(() => undefined);
+      const up = superiorOf(state, seat);
+      if (up) {
+        const mins = Math.round((this.now() - since) / 60_000);
+        await this.tell(project, state, up, `${seat.name} waits on a prompt in its pane${mins ? ` (${mins} min)` : ""}; the Human was notified.` +
+          (waiting.kind === "choice" ? `\n${waiting.text}` : ""), seat.lane);
       }
     }
+  }
+
+  /**
+   * What a seat waits on, if anything: a permission prompt slp knows, a
+   * Yes/No it does not (ADR 0020), or another prompt Herdr reports. An idle
+   * seat's screen is read too (Herdr may not see such a prompt), at most every
+   * PEEK_MS unless something was already seen there.
+   */
+  private async promptOf(seat: Seat, s: string): Promise<{ kind: "permission" | "choice" | "other"; text: string | null } | null> {
+    if (s === "working") return null;
+    if (s !== "blocked" && !this.blockedSince.has(seat.name)) {
+      if (this.now() - (this.peeked.get(seat.name) ?? -Infinity) < PEEK_MS) return null;
+      this.peeked.set(seat.name, this.now());
+    }
+    const screen = await this.deps.herdr.agentRead(seat.paneId).catch(() => "");
+    // A startup dialog is the Human's, reported where letters wait (pump).
+    if (showsStartupDialog(screen)) return null;
+    const known = permissionPrompt(screen);
+    if (known) return { kind: "permission", text: known.excerpt };
+    const choice = choicePrompt(screen);
+    if (choice) return { kind: "choice", text: choice };
+    return s === "blocked" ? { kind: "other", text: null } : null;
   }
 
   /** Close Reviewer and Critic seats that have reported, once their turn ends. */

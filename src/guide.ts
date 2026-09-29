@@ -15,16 +15,21 @@ const SHARED = `## What holds for every seat
   role must not run (push, pull, checkout, switch, stash, forced branch
   moves; commits and merges unless you are a Peer): ask, do not work around.
 - Your role's permissions are set for you: what you may not touch is
-  refused outright; anything else that asks goes to whoever answers for the
-  Human. Never try to reach secrets, other agents' logins or git config.
+  refused outright, the rest runs without asking. Never ask anyone for leave
+  to read, edit or run what your brief covers; questions go up only about
+  the work itself (the idea, design, technology, trade-offs). If a prompt
+  still appears, it goes to whoever answers for the Human. Never try to
+  reach secrets, other agents' logins or git config.
+- Commands: one at a time, from where you are. Never \`cd dir; cmd\` or
+  \`cd dir && cmd\`: use absolute paths, \`git -C <dir>\`, a tool's own
+  directory option, and the Read, Grep and Glob tools to read files.
 - Long text goes through stdin: \`slp <verb> ... - <<'EOF'\` (bash) or a
   PowerShell here-string piped to \`slp.cmd <verb> ... -\`. Drafts on disk
   belong in a temporary directory, never in the repository.
 - Letters arrive between your turns as "[SLP <KIND> #n from <seat>]". Your
   first letter carries your brief; there is nothing else to fetch.
 - Run each slp command on its own: one per call, never chained with \`&&\`,
-  \`;\` or a pipe. slp commands run without asking; anything else waits for
-  the Human's approval.`;
+  \`;\` or a pipe.`;
 
 const GUIDES: Record<Role, string> = {
   supervisor: `# slp guide: Supervisor
@@ -99,7 +104,8 @@ changing them is a lane's work (a Peer writes, a Lead judges), never yours.
   anything that deletes, publishes, installs from the network, or touches
   files outside the lane, unless the Human said so. Each answer is recorded
   and a Peer's Lead is told. With the Human in the loop, their prompts are
-  theirs.
+  theirs. Prompts are rare: seats run without asking unless the Human's
+  config says otherwise.
 - A lane's REPORT ready arrives with its gate result. Acceptance met →
   \`slp close-lane L1 --land\`. A red gate is the Lead's to fix; override only
   with \`--over-gate --reason "..."\`. To stop a lane: \`slp close-lane L1 --drop

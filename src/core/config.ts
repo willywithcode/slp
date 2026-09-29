@@ -41,6 +41,9 @@ const RoleConfig = z.object({
   // Named choices a Lead may pick per task (Peers): e.g. sol, luna, flash.
   presets: z.record(z.string(), Preset).default({}),
   defaultPreset: z.string().nullable().default(null),
+  // More Claude Code permission rules the role runs without asking (ADR
+  // 0016), e.g. "Bash(dotnet build*)"; slp's deny rules still win.
+  allow: z.array(z.string()).default([]),
 });
 export type RoleConfig = z.infer<typeof RoleConfig>;
 
@@ -50,8 +53,20 @@ const ConfigSchema = z.object({
   roles: z.record(Role, RoleConfig),
   // The watch (ADR 0009): incidents are mailed to seats only once the owner
   // turns mail on; at most budgetPerDay per recipient.
-  watch: z.object({ mail: z.boolean().default(false), budgetPerDay: z.number().int().positive().default(20) })
-    .default({ mail: false, budgetPerDay: 20 }),
+  // Timings: a permission prompt goes to the Supervisor after permitAfterMs
+  // (a prompt of a kind slp does not know, to whoever answers, after as
+  // long); other prompts reach the Human after blockedMs; the watcher looks
+  // every intervalSeconds.
+  watch: z.object({
+    mail: z.boolean().default(false), budgetPerDay: z.number().int().positive().default(20),
+    permitAfterMs: z.number().int().nonnegative().default(20_000),
+    blockedMs: z.number().int().nonnegative().default(180_000),
+    intervalSeconds: z.number().int().positive().default(5),
+  }).default({ mail: false, budgetPerDay: 20, permitAfterMs: 20_000, blockedMs: 180_000, intervalSeconds: 5 }),
+  // How seats are permitted (ADR 0020): auto runs Claude seats without asking
+  // (bypass, held by slp's deny rules, the git shim and, where there is one,
+  // the sandbox); ask keeps Claude Code's prompts for anything not allowed.
+  permissions: z.object({ mode: z.enum(["auto", "ask"]).default("auto") }).default({ mode: "auto" }),
   // Where lanes work (ADR 0018): auto (the checkout when clean, on base and
   // free, else ask), newBranch, onBranch or isolate; and a command run in
   // every new working copy before its seat starts.
@@ -97,7 +112,8 @@ export function defaultConfig(): Config {
   };
   return {
     version: 1,
-    watch: { mail: false, budgetPerDay: 20 },
+    watch: { mail: false, budgetPerDay: 20, permitAfterMs: 20_000, blockedMs: 180_000, intervalSeconds: 5 },
+    permissions: { mode: "auto" },
     jev: { mode: "shadow", dailyCalls: 300, thresholds: {} },
     human: { inLoop: false },
     lanes: { home: "auto", setup: null },
@@ -107,11 +123,11 @@ export function defaultConfig(): Config {
       agy: { agent: "agy", env: {}, prep: {} },
     },
     roles: {
-      supervisor: { use: ["claude"], model: OPUS, effort: "xhigh", presets: {}, defaultPreset: null },
-      lead: { use: ["claude"], model: OPUS, effort: "high", presets: {}, defaultPreset: null },
-      reviewer: { use: ["claude"], model: OPUS, effort: "high", presets: {}, defaultPreset: null },
-      critic: { use: ["claude"], model: OPUS, effort: "high", presets: {}, defaultPreset: null },
-      peer: { use: ["codex"], model: "gpt-6-sol", effort: "high", presets: peerPresets, defaultPreset: "sol" },
+      supervisor: { use: ["claude"], model: OPUS, effort: "xhigh", presets: {}, defaultPreset: null, allow: [] },
+      lead: { use: ["claude"], model: OPUS, effort: "high", presets: {}, defaultPreset: null, allow: [] },
+      reviewer: { use: ["claude"], model: OPUS, effort: "high", presets: {}, defaultPreset: null, allow: [] },
+      critic: { use: ["claude"], model: OPUS, effort: "high", presets: {}, defaultPreset: null, allow: [] },
+      peer: { use: ["codex"], model: "gpt-6-sol", effort: "high", presets: peerPresets, defaultPreset: "sol", allow: [] },
     },
   };
 }
