@@ -370,9 +370,19 @@ export async function dropLane(deps: Deps, project: Project, laneId: string, rea
   deps.out(`lane ${laneId} dropped; branch ${lane.branch} kept${problems.length ? `\n${problems.join("\n")}` : ""}`);
 }
 
+/** How long a queued lane waits for the lane before it to leave the checkout. */
+const QUEUE_SETTLE_MS = 2 * 60_000;
+
 /** A queued lane's turn came (ADR 0018): open it, or say why it cannot and take it off the queue. */
-export async function openQueued(deps: Deps, project: Project, queued: EventOf<"lane-queued">): Promise<void> {
-  const state = fold(await readLedger(deps.env, project.id));
+export async function openQueued(deps: Deps, project: Project, queued: EventOf<"lane-queued">, now = Date.now()): Promise<void> {
+  const events = await readLedger(deps.env, project.id);
+  const state = fold(events);
+  // A drop tears its lane down in its own process: while the checkout is
+  // still on that lane's branch, wait (a little) for it to be switched back.
+  const after = state.lanes.get(queued.after);
+  const closed = events.findLast((e) => e.kind === "lane-close" && e.lane === queued.after)?.ts;
+  if (after?.inCheckout && after.home !== "onBranch" && closed && now - Date.parse(closed) < QUEUE_SETTLE_MS &&
+    (await currentBranch(project.root)) === after.branch) return;
   const to = state.seats.get("sup")?.live ? "sup" : "human";
   try {
     const config = await loadConfig(deps.env);

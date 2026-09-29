@@ -346,3 +346,41 @@ describe("fourth review round", () => {
     expect((await w.inbox("sup")).at(-1)).toMatch(/changed after the Human agreed/);
   });
 });
+
+describe("v0.4 review round", () => {
+  it("on the Human's own branch, a merge after the lane review is not covered by it", async () => {
+    const w = await World.create();
+    const { laneReviewed } = await import("../src/risk.js");
+    sh(w.repo, "checkout", "-q", "-b", "other");
+    await commitFile(w.repo, "src/other.js", "unreviewed\n");
+    sh(w.repo, "checkout", "-q", "-b", "feature", "main");
+    await commitFile(w.repo, "src/a.js", "a\n");
+    const reviewed = sh(w.repo, "rev-parse", "HEAD");
+    sh(w.repo, "merge", "-q", "--no-ff", "-m", "Merge other", "other");
+    const state = { reviews: new Map([["R1", { id: "R1", lane: "L1", target: "L1", focus: "", seat: "R1", head: reviewed, done: { summary: "ok" } }]]) } as never;
+    const onBranch = { id: "L1", base: "feature", branch: "feature", home: "onBranch" } as never;
+    expect(await laneReviewed(w.repo, state, onBranch, sh(w.repo, "rev-parse", "HEAD"))).toBe(false);
+  });
+
+  it("a queued lane waits while a drop is still switching the checkout back", async () => {
+    const w = await started();
+    await w.as("sup", LANE);
+    await w.as("sup", [...DOCS.slice(0, -2), "--after", "L1"]);
+    const l1 = (await w.state()).lanes.get("L1")!;
+    // The drop recorded, its teardown not finished: the checkout is still on L1's branch.
+    await append({ SLP_HOME: w.home }, w.project, () => ({ kind: "lane-close" as const, lane: "L1", landed: false, reason: "x", commit: null, overGate: false }));
+    for (const seat of ["L1", "L1-critic"]) {
+      if ((await w.state()).seats.get(seat)?.live) await append({ SLP_HOME: w.home }, w.project, () => ({ kind: "seat-stop" as const, name: seat, reason: "x" }));
+    }
+    expect(sh(w.repo, "branch", "--show-current")).toBe(l1.branch);
+    await watchOnce(w);
+    let s = await w.state();
+    expect(s.queued.has("L2")).toBe(true);
+    expect(s.lanes.has("L2")).toBe(false);
+    // Once the checkout is back on base, it opens.
+    sh(w.repo, "checkout", "-q", "main");
+    await watchOnce(w);
+    s = await w.state();
+    expect(s.lanes.get("L2")).toMatchObject({ open: true, inCheckout: true });
+  });
+});
